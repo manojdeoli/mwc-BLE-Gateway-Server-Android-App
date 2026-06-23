@@ -1,8 +1,7 @@
-# Built application files
-*.apk
+# Built application files — exclude build outputs but allow root-level APK for distribution
 *.aab
-app-debug.apk
-app-release.apk
+app/build/**/*.apk
+!app-debug.apk
 *.ap_
 *.dex
 
