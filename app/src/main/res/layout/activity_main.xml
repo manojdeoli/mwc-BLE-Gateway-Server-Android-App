@@ -191,6 +191,17 @@
                 android:fontFamily="monospace"
                 android:padding="6dp"
                 android:background="#E8F5E9"
+                android:layout_marginBottom="2dp" />
+
+            <TextView
+                android:id="@+id/debugNearStation"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="[AT STATION] --"
+                android:textSize="13sp"
+                android:fontFamily="monospace"
+                android:padding="6dp"
+                android:background="#E8F5E9"
                 android:layout_marginBottom="16dp" />
 
             <!-- Simulation toggles -->

@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class GatewayServer extends NanoWSD {
+
     private static final String TAG  = "GatewayServer";
     private static final int    PORT = 8080;
 
@@ -64,7 +65,7 @@ public class GatewayServer extends NanoWSD {
     // Broadcast methods
     // -------------------------------------------------------------------------
 
-    /** Unchanged — broadcasts BLE beacon event to all connected WebSocket clients. */
+    /** Unchanged — broadcasts BLE beacon event to all WebSocket clients. */
     public void broadcastBLEEvent(String beaconName, int rssi) {
         new Thread(() -> {
             try {
@@ -80,7 +81,7 @@ public class GatewayServer extends NanoWSD {
         }).start();
     }
 
-    /** Unchanged — broadcasts mobility context event to all connected WebSocket clients. */
+    /** Unchanged — broadcasts mobility context event to all WebSocket clients. */
     public void broadcastContextEvent(ContextEvent event) {
         new Thread(() -> {
             try {
@@ -92,15 +93,73 @@ public class GatewayServer extends NanoWSD {
     }
 
     /**
-     * Broadcasts a validation lifecycle event (REQUIRED or SUCCESS).
-     * Format: {"eventType":"validation","status":"REQUIRED","method":"BLE",
-     *          "beaconName":"HotelGate","timestamp":...}
-     * Unchanged — existing BLE validation contract preserved exactly.
+     * Gap 2.1: broadcasts an exit signal to all WebSocket clients.
+     *
+     * Vocabulary clarification:
+     *   Device = supporting signal source (network + BLE precision layer).
+     *   Backend = single source of truth and barrier control authority.
+     *
+     * The device emits a signal describing the journey state it observed.
+     * The backend reads this signal and decides whether to open the barrier.
+     * The device NEVER commands hardware directly.
+     *
+     * Format:
+     * {
+     *   "eventType":  "exitSignal",
+     *   "signal":     "CLEAR",
+     *   "confidence": "HIGH_CONFIDENCE",
+     *   "beaconName": "HotelGate",
+     *   "journeyId":  "J001",
+     *   "timestamp":  1712345678910
+     * }
+     *
+     * signal values:
+     *   "CLEAR"     — journey correlation clear, device observed no ambiguity
+     *   "AMBIGUOUS" — journey correlation inconclusive, backend should require scan
+     *
+     * confidence values:
+     *   "HIGH_CONFIDENCE"    — BLE proximity confirmed + backend correlation clear
+     *   "LOW_CONFIDENCE"     — backend correlation ambiguous
+     *   "NETWORK_CONFIDENCE" — Gap 2.3 fallback: BLE absent, network proximity only
+     *
+     * @param beaconName name of the barrier beacon (or "NETWORK_ONLY" for fallback)
+     * @param signal     "CLEAR" or "AMBIGUOUS"
+     * @param confidence "HIGH_CONFIDENCE", "LOW_CONFIDENCE", or "NETWORK_CONFIDENCE"
+     * @param journeyId  correlates with the advisory's journeyId
      */
-    public void broadcastValidationEvent(String beaconName, String status) {
+    public void broadcastExitSignal(String beaconName, String signal,
+                                    String confidence, String journeyId) {
         new Thread(() -> {
             try {
-                broadcastToAllClients(gson.toJson(new ValidationEvent(beaconName, status)));
+                broadcastToAllClients(gson.toJson(
+                    new ExitSignalEvent(beaconName, signal, confidence, journeyId)));
+            } catch (Exception e) {
+                Log.e(TAG, "Error broadcasting exit signal", e);
+            }
+        }).start();
+    }
+
+    /**
+     * Phase 4: broadcasts validation lifecycle event (REQUIRED or SUCCESS).
+     * NFC is the only method — method field is always "NFC".
+     *
+     * Format:
+     * {
+     *   "eventType": "validation",
+     *   "status":    "REQUIRED",
+     *   "method":    "NFC",
+     *   "journeyId": "J001",
+     *   "timestamp": 1712345678910
+     * }
+     *
+     * @param journeyId correlates with the advisory's journeyId
+     * @param status    "REQUIRED" or "SUCCESS"
+     * @param method    always "NFC" — biometric removed from barrier flow
+     */
+    public void broadcastValidationEvent(String journeyId, String status, String method) {
+        new Thread(() -> {
+            try {
+                broadcastToAllClients(gson.toJson(new ValidationEvent(journeyId, status, method)));
             } catch (Exception e) {
                 Log.e(TAG, "Error broadcasting validation event", e);
             }
@@ -108,23 +167,20 @@ public class GatewayServer extends NanoWSD {
     }
 
     /**
-     * Broadcasts an NFC card-read validation event.
+     * Broadcasts an NFC card-read validation SUCCESS event.
      *
      * Format:
      * {
      *   "eventType": "validation",
      *   "status":    "SUCCESS",
      *   "method":    "NFC",
-     *   "journeyId": "journey-20240418-001",
+     *   "journeyId": "J001",
      *   "tagId":     "A3F204BC",
      *   "timestamp": 1712345678910
      * }
      *
-     * Parallel to broadcastValidationEvent() — same eventType, different method field.
-     * Existing broadcastValidationEvent() signature and behaviour are untouched.
-     *
-     * @param journeyId correlates with the advisory that triggered this validation
-     * @param tagId     uppercase hex UID of the card that was tapped
+     * @param journeyId correlates with the advisory
+     * @param tagId     uppercase hex UID of the tapped card
      * @param status    "SUCCESS" or "FAILED"
      */
     public void broadcastNfcValidationEvent(String journeyId, String tagId, String status) {
@@ -133,22 +189,6 @@ public class GatewayServer extends NanoWSD {
                 broadcastToAllClients(gson.toJson(new NfcValidationEvent(journeyId, tagId, status)));
             } catch (Exception e) {
                 Log.e(TAG, "[NFC] Error broadcasting NFC validation event", e);
-            }
-        }).start();
-    }
-
-    /**
-     * Fix 3.7: broadcasts explainability event — WHY validation was triggered.
-     * Format: {"eventType":"validationReason","beaconName":"HotelGate",
-     *          "reason":"BIOMETRIC_REQUIRED","biometricFresh":false,"timestamp":...}
-     */
-    public void broadcastValidationReasonEvent(String beaconName, String reason, boolean biometricFresh) {
-        new Thread(() -> {
-            try {
-                broadcastToAllClients(gson.toJson(
-                    new ValidationReasonEvent(beaconName, reason, biometricFresh)));
-            } catch (Exception e) {
-                Log.e(TAG, "Error broadcasting validation reason event", e);
             }
         }).start();
     }
@@ -273,53 +313,67 @@ public class GatewayServer extends NanoWSD {
 
     private static class BLEData {
         String beaconName; int rssi; String zone; long timestamp;
-        BLEData(String beaconName, int rssi, String zone, long timestamp) {
-            this.beaconName = beaconName; this.rssi = rssi;
-            this.zone = zone; this.timestamp = timestamp;
-        }
-    }
-
-    private static class ValidationEvent {
-        final String eventType = "validation";
-        final String status;
-        final String method    = "BLE";
-        final String beaconName;
-        final long   timestamp = System.currentTimeMillis();
-        ValidationEvent(String beaconName, String status) {
-            this.beaconName = beaconName; this.status = status;
+        BLEData(String n, int r, String z, long t) {
+            beaconName = n; rssi = r; zone = z; timestamp = t;
         }
     }
 
     /**
-     * NFC card-read validation event.
-     * Same eventType as ValidationEvent so the web app handles both uniformly.
-     * Differentiated by method="NFC" and the presence of tagId / journeyId.
+     * Gap 2.1: exit signal event — device signal, backend is the control authority.
+     *
+     * signal="CLEAR"     : device observed no ambiguity, backend should open barrier.
+     * signal="AMBIGUOUS" : device observed ambiguity, backend should require a scan.
+     *
+     * Gap 2.3: beaconName="NETWORK_ONLY" with confidence="NETWORK_CONFIDENCE" is
+     * emitted by the BLE-absent fallback when no beacon was detected but the
+     * network confirmed station proximity. Backend decides whether to accept it.
+     */
+    private static class ExitSignalEvent {
+        final String eventType  = "exitSignal";
+        final String beaconName;
+        final String signal;      // "CLEAR" or "AMBIGUOUS"
+        final String confidence;  // "HIGH_CONFIDENCE", "LOW_CONFIDENCE", "NETWORK_CONFIDENCE"
+        final String journeyId;
+        final long   timestamp  = System.currentTimeMillis();
+        ExitSignalEvent(String beaconName, String signal, String confidence, String journeyId) {
+            this.beaconName = beaconName;
+            this.signal     = signal;
+            this.confidence = confidence;
+            this.journeyId  = journeyId;
+        }
+    }
+
+    /**
+     * Gap 2.4: validation event — method label is now passed as a parameter,
+     * not hardcoded. Supports "NFC", "RFID", "OTHER" without code changes.
+     */
+    private static class ValidationEvent {
+        final String eventType = "validation";
+        final String status;
+        final String method;   // "NFC" | "RFID" | "OTHER" — from TransportConfig
+        final String journeyId;
+        final long   timestamp = System.currentTimeMillis();
+        ValidationEvent(String journeyId, String status, String method) {
+            this.journeyId = journeyId;
+            this.status    = status;
+            this.method    = method;
+        }
+    }
+
+    /**
+     * NFC card-read validation event — unchanged contract.
      */
     private static class NfcValidationEvent {
         final String eventType = "validation";
         final String status;
         final String method    = "NFC";
         final String journeyId;
-        final String tagId;     // uppercase hex UID, e.g. "A3F204BC"
+        final String tagId;
         final long   timestamp = System.currentTimeMillis();
         NfcValidationEvent(String journeyId, String tagId, String status) {
             this.journeyId = journeyId;
             this.tagId     = tagId;
             this.status    = status;
-        }
-    }
-
-    /** Fix 3.7: explainability payload. */
-    private static class ValidationReasonEvent {
-        final String  eventType      = "validationReason";
-        final String  beaconName;
-        final String  reason;
-        final boolean biometricFresh;
-        final long    timestamp      = System.currentTimeMillis();
-        ValidationReasonEvent(String beaconName, String reason, boolean biometricFresh) {
-            this.beaconName     = beaconName;
-            this.reason         = reason;
-            this.biometricFresh = biometricFresh;
         }
     }
 }

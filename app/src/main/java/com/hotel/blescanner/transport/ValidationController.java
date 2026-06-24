@@ -1,13 +1,14 @@
 package com.hotel.blescanner.transport;
 
+import android.content.Intent;
 import android.util.Log;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import com.hotel.blescanner.BLEScanService;
 import com.hotel.blescanner.GatewayServer;
 import com.hotel.blescanner.config.TransportConfig;
 import com.hotel.blescanner.mode.DeviceMode;
 import com.hotel.blescanner.mode.DeviceModeController;
 import java.util.Arrays;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -16,72 +17,88 @@ import java.util.concurrent.TimeUnit;
 /**
  * Central controller for Transport mode behaviour.
  *
- * Fixes applied in this revision:
- *   3.1  Biometric freshness checked before triggering prompt — no repeat prompts
- *   3.2  onBiometricSuccess() closes the feedback loop with SUCCESS broadcast
- *   3.3  RSSI threshold guard on barrier proximity (configurable, not hardcoded)
- *   3.4  Explicit transport session lifecycle (start/end) prevents accidental switching
- *   3.5  Advisory stability window — debounce before applying mode switch
- *   3.7  validationReason event broadcasts why validation was triggered
- *   Fix B Structured log tags: [MODE] [VALIDATION] [BIOMETRIC] [SESSION] [ADVISORY]
+ * Refinements applied in this revision:
+ *
+ *   Phase 1+4+8 : Biometric removed from barrier flow entirely.
+ *                 Barrier uses NFC-only validation (triggerNfcOnly).
+ *                 validationConsumed (AtomicBoolean race guard) removed.
+ *
+ *   Phase 2     : Biometric is passive freshness check only.
+ *                 Triggered by NetworkProximityMonitor at station arrival
+ *                 (Gap 2.3), NOT at barrier and NOT at advisory commit.
+ *                 BiometricManager and BiometricCallback kept — usage only.
+ *
+ *   Phase 3     : Binary barrier decision in onBarrierProximity():
+ *                 validationRequired=false → broadcastBarrierDecision(OPEN)
+ *                 validationRequired=true  → broadcastBarrierDecision(CLOSED) + NFC
+ *
+ *   Phase 5     : ENTRY stage fast-path in commitAdvisory().
+ *                 stage=ENTRY (or absent) → pendingValidationRequired=false,
+ *                 rfDetectionRequired IGNORED, NO session, NO BLE activation.
+ *                 Returns immediately — zero barrier logic at entry.
+ *
+ *   Gap 2.2     : Renamed barrier event to barrierDecision — clarifies device=signal,
+ *                 backend=control authority.
+ *
+ *   Gap 2.4     : correlationScore from BackendAdvisory is logged for transparency.
+ *                 Device never branches on it — all decisions from validationRequired.
+ *
+ * All existing mechanisms preserved:
+ *   - Advisory stability window (Fix 3.5)
+ *   - Fail-safe revert to HOTEL (advisory timeout + WebSocket disconnect)
+ *   - Session lifecycle + session timeout (Fix 3.4)
+ *   - RSSI threshold guard (Fix 3.3)
+ *   - Validation cooldown (Fix 3.6)
+ *   - NFC success flow unchanged
+ *   - All structured log tags [MODE][VALIDATION][BIOMETRIC][SESSION][ADVISORY]
  *
  * Thread safety:
- *   - applyAdvisory(), onWebSocketDisconnected(), revertToHotel() are synchronized
- *   - All shared state fields are volatile
- *   - biometricCallback is volatile — written on main thread, read on scheduler thread
+ *   - applyAdvisory(), onWebSocketDisconnected(), revertToHotel() synchronized
+ *   - All shared state volatile
+ *   - biometricCallback volatile — written on main thread, read on scheduler thread
  */
 public class ValidationController {
 
-    // Structured log tags (Fix B)
-    private static final String TAG       = "ValidationController";
-    private static final String T_MODE    = "[MODE]";
-    private static final String T_VAL    = "[VALIDATION]";
-    private static final String T_BIO    = "[BIOMETRIC]";
-    private static final String T_SES    = "[SESSION]";
-    private static final String T_ADV    = "[ADVISORY]";
+    private static final String TAG    = "ValidationController";
+    private static final String T_MODE = "[MODE]";
+    private static final String T_VAL  = "[VALIDATION]";
+    private static final String T_BIO  = "[BIOMETRIC]";
+    private static final String T_SES  = "[SESSION]";
+    private static final String T_ADV  = "[ADVISORY]";
 
-    private final DeviceModeController    modeController;
-    private       RFActivationController  rfActivation;
-    private final BLEScanService          bleService;
-    private final TransportConfig         config;
-    private       GatewayServer           gatewayServer;
-    private       BiometricManager        biometricManager;
+    private final DeviceModeController   modeController;
+    private       RFActivationController rfActivation;
+    private final BLEScanService         bleService;
+    private final TransportConfig        config;
+    private       GatewayServer          gatewayServer;
+    private       BiometricManager       biometricManager;   // freshness check only
+    private volatile BiometricCallback   biometricCallback;  // pre-journey prompt only
 
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
-    // Fail-safe revert timer (existing Fix 3.7-prev)
+    // Advisory lifecycle
     private ScheduledFuture<?> advisoryTimeoutFuture;
-
-    // Fix 3.5: advisory stability debounce — pending advisory waits before being applied
     private ScheduledFuture<?> advisoryStabilityFuture;
     private volatile BackendAdvisory pendingAdvisory = null;
 
-    // Fix 3.4: explicit session state
-    private volatile boolean transportSessionActive = false;
-    private ScheduledFuture<?> sessionTimeoutFuture;
+    // Session lifecycle
+    private volatile boolean       transportSessionActive   = false;
+    private ScheduledFuture<?>     sessionTimeoutFuture;
 
-    // Validation cooldown
-    private volatile long lastValidationTriggerMs = 0L;
-
-    // Fix 3.4: pending validation state
+    // Barrier state
+    private volatile long    lastBarrierEvalMs        = 0L;
     private volatile boolean pendingValidationRequired = false;
 
-    // Fix 3.4: biometric callback
-    private volatile BiometricCallback biometricCallback;
-
     /**
-     * Race condition guard for parallel biometric + NFC validation paths.
-     *
-     * When triggerValidation() fires, both biometric and NFC are started.
-     * Whichever completes first calls compareAndSet(false, true) and wins.
-     * The second path sees true and exits immediately without broadcasting
-     * a duplicate result. Reset to false on every new triggerValidation() call.
-     *
-     * AtomicBoolean is used (not volatile boolean) because compareAndSet
-     * must be atomic — read-check-write must not be interleaved between
-     * the biometric callback thread and the NFC main thread.
+     * Gap 2.3: BLE-absent fallback timer.
+     * Scheduled when a transport session starts. If no BLE barrier beacon is
+     * detected within BLE_ABSENT_FALLBACK_MS (default 30s), the device broadcasts
+     * an exitSignal CLEAR using network-only confidence, keeping the system
+     * functional when BLE is unavailable.
+     * Cancelled and reset on every successful barrier proximity detection.
      */
-    private final AtomicBoolean validationConsumed = new AtomicBoolean(false);
+    private ScheduledFuture<?> bleAbsentFallbackFuture;
+    private volatile String    pendingFallbackJourneyId = null;
 
     public ValidationController(DeviceModeController   modeController,
                                 RFActivationController rfActivation,
@@ -93,59 +110,76 @@ public class ValidationController {
         this.config         = config;
     }
 
-    public void setRfActivation(RFActivationController rfActivation)  { this.rfActivation   = rfActivation; }
-    public void setGatewayServer(GatewayServer gatewayServer)          { this.gatewayServer   = gatewayServer; }
-    public void setBiometricManager(BiometricManager biometricManager) { this.biometricManager = biometricManager; }
-    public void setBiometricCallback(BiometricCallback callback)        { this.biometricCallback = callback; }
+    public void setRfActivation(RFActivationController rfActivation)  { this.rfActivation  = rfActivation; }
+    public void setGatewayServer(GatewayServer gs)                     { this.gatewayServer  = gs; }
+    public void setBiometricManager(BiometricManager bm)               { this.biometricManager = bm; }
+    public void setBiometricCallback(BiometricCallback cb)             { this.biometricCallback = cb; }
 
     // -------------------------------------------------------------------------
-    // Advisory handling — Fix 3.2 (atomic) + Fix 3.5 (stability window)
+    // Advisory handling — stability window (Fix 3.5) + ENTRY fast-path (Phase 5)
     // -------------------------------------------------------------------------
 
-    /**
-     * Receives a validated advisory from GatewayServer.
-     *
-     * Fix 3.5: advisory is held in a stability window before being applied.
-     * If a contradicting advisory arrives within the window, the timer resets —
-     * only a stable advisory (no contradiction for ADVISORY_STABILITY_WINDOW_MS)
-     * is committed. This prevents mode flipping on unstable WebSocket connections.
-     */
     public synchronized void applyAdvisory(BackendAdvisory advisory) {
-        Log.d(TAG, T_ADV + " Advisory received: rfDetection=" + advisory.rfDetectionRequired
-            + " validation=" + advisory.validationRequired + " risk=" + advisory.riskLevel);
+        Log.d(TAG, T_ADV + " Advisory received: stage=" + advisory.stage
+            + " rfDetection=" + advisory.rfDetectionRequired
+            + " validation=" + advisory.validationRequired
+            + " risk=" + advisory.riskLevel
+            + " correlationScore=" + advisory.correlationScore);
 
-        resetAdvisoryTimeout();   // restart the fail-safe 30s timer on every advisory
-
+        resetAdvisoryTimeout();
         pendingAdvisory = advisory;
 
-        // Cancel any in-flight stability timer and restart it
         if (advisoryStabilityFuture != null && !advisoryStabilityFuture.isDone()) {
             advisoryStabilityFuture.cancel(false);
         }
         advisoryStabilityFuture = scheduler.schedule(
             this::commitAdvisory,
             config.getAdvisoryStabilityWindowMs(),
-            TimeUnit.MILLISECONDS
-        );
+            TimeUnit.MILLISECONDS);
     }
 
     /**
-     * Commits the pending advisory after the stability window has passed without contradiction.
-     * Atomic: both modeController and rfActivation are updated before applyCurrentMode().
+     * Commits the pending advisory after the stability window.
+     *
+     * Phase 5 / Gap 2.5 — ENTRY fast-path:
+     *   stage=ENTRY (or absent) → pendingValidationRequired=false,
+     *   rfDetectionRequired IGNORED, no session, no BLE activation, return.
+     *   Barrier is always OPEN at entry with zero device-side logic.
+     *
+     * EXIT stage:
+     *   Normal transport flow — session started, BLE activation eligible.
+     *   pendingValidationRequired = advisory.validationRequired (backend correlation result).
      */
     private synchronized void commitAdvisory() {
         BackendAdvisory advisory = pendingAdvisory;
         if (advisory == null) return;
 
-        Log.d(TAG, T_ADV + " Committing advisory: rfDetection=" + advisory.rfDetectionRequired
-            + " validation=" + advisory.validationRequired);
+        Log.d(TAG, T_ADV + " Committing: stage=" + advisory.stage
+            + " validation=" + advisory.validationRequired
+            + " correlationScore=" + advisory.correlationScore);
+
+        // Phase 5 / Gap 2.5: ENTRY or absent stage — minimal logic, barrier always open
+        if (!advisory.isExitStage()) {
+            pendingValidationRequired = false;
+            // Explicitly do NOT set rfDetectionRequired — no BLE at entry
+            // Explicitly do NOT start a session
+            Log.d(TAG, T_ADV + " ENTRY stage — barrier always open, no BLE, no session");
+            return;
+        }
+
+        // EXIT stage — normal transport flow
+        // Gap 2.4: log correlation confidence + score; device never branches on them
+        Log.d(TAG, T_ADV + " EXIT stage — correlationScore=" + advisory.correlationScore
+            + " correlationConfidence=" + advisory.correlationConfidence
+            + " → validationRequired=" + advisory.validationRequired);
 
         pendingValidationRequired = advisory.validationRequired;
 
         if (advisory.rfDetectionRequired) {
             rfActivation.setRfDetectionRequired(true);
             modeController.setMode(DeviceMode.TRANSPORT);
-            startTransportSession();
+            startTransportSession(resolveJourneyId(advisory.journeyId != null
+                ? advisory.journeyId : ""));
         } else {
             rfActivation.setRfDetectionRequired(false);
             modeController.setMode(DeviceMode.HOTEL);
@@ -157,26 +191,30 @@ public class ValidationController {
     }
 
     // -------------------------------------------------------------------------
-    // Fix 3.4: Transport session lifecycle
+    // Session lifecycle (Fix 3.4) — EXIT stage only
     // -------------------------------------------------------------------------
 
-    private void startTransportSession() {
+    private void startTransportSession(String journeyId) {
         if (transportSessionActive) return;
-        transportSessionActive = true;
+        transportSessionActive   = true;
+        pendingFallbackJourneyId = journeyId;
         Log.d(TAG, T_SES + " Transport session started");
-
-        // Reset session timeout
         cancelSessionTimeout();
         sessionTimeoutFuture = scheduler.schedule(() -> {
-            Log.w(TAG, T_SES + " Session timeout — no barrier detected, ending session");
+            Log.w(TAG, T_SES + " Session timeout — no barrier detected, reverting");
             endTransportSessionAndRevert();
         }, config.getSessionTimeoutMs(), TimeUnit.MILLISECONDS);
+
+        // Gap 2.3: schedule BLE-absent fallback — fires if no beacon detected in time
+        scheduleBleAbsentFallback(journeyId);
     }
 
     private void endTransportSession() {
         if (!transportSessionActive) return;
         transportSessionActive = false;
         cancelSessionTimeout();
+        cancelBleAbsentFallback();
+        pendingFallbackJourneyId = null;
         Log.d(TAG, T_SES + " Transport session ended");
     }
 
@@ -188,70 +226,92 @@ public class ValidationController {
     public boolean isTransportSessionActive() { return transportSessionActive; }
 
     // -------------------------------------------------------------------------
-    // WebSocket disconnect — immediate revert
+    // WebSocket disconnect — fail-safe revert
     // -------------------------------------------------------------------------
 
     public synchronized void onWebSocketDisconnected() {
-        // Do NOT revert during an active transport session — the web app reconnects
-        // every 2s and each cycle would otherwise kill the session prematurely.
-        // The session has its own timeout (sessionTimeoutMs) as a safety net.
         if (transportSessionActive) {
-            Log.d(TAG, T_ADV + " WebSocket disconnected — transport session active, keeping TRANSPORT mode");
+            // Session has its own timeout — do not kill session on transient WS drop
+            Log.d(TAG, T_ADV + " WS disconnected — session active, keeping TRANSPORT");
             return;
         }
-        Log.w(TAG, T_ADV + " WebSocket disconnected — no active session, reverting to HOTEL");
+        Log.w(TAG, T_ADV + " WS disconnected — no session, reverting to HOTEL");
         cancelAdvisoryTimeout();
         cancelAdvisoryStability();
         revertToHotel();
     }
 
     // -------------------------------------------------------------------------
-    // Barrier proximity — Fix 3.3 (RSSI threshold) + Fix 3.4 (session guard)
+    // Barrier proximity — Phase 3: binary OPEN/CLOSED decision
     // -------------------------------------------------------------------------
 
     /**
      * Called by BLEScanService.scanCallback on every beacon detection.
      *
      * Guards (in order):
-     *   1. TRANSPORT mode active
-     *   2. Active transport session (Fix 3.4)
-     *   3. Cooldown window
-     *   4. Beacon is in barrier list (config-driven)
-     *   5. RSSI above threshold — close enough to barrier (Fix 3.3)
+     *   1. TRANSPORT mode — HOTEL calls return immediately (zero HOTEL impact)
+     *   2. Active transport session — no accidental validation outside session
+     *   3. Cooldown — prevents repeat evaluations within 10s
+     *   4. Beacon in barrier list — config-driven, not hardcoded
+     *   5. RSSI threshold — rejects far-field detections (Fix 3.3)
+     *
+     * Binary decision (Phase 3 / Gap 2.2):
+     *   validationRequired=false → barrierDecision OPEN  (80–90% of users)
+     *   validationRequired=true  → barrierDecision CLOSED + triggerNfcOnly
+     *
+     * Device sends a SIGNAL (barrierDecision). Backend/infrastructure controls
+     * the physical barrier — the device never commands hardware (Gap 2.2).
      */
     public void onBarrierProximity(String beaconName, int rssi) {
+        // Guard 1: HOTEL mode — return immediately, zero impact on hotel flows
         if (!modeController.isTransportMode()) return;
 
-        // Fix 3.4: only process if session is explicitly active
+        // Guard 2: session must be explicitly active
         if (!transportSessionActive) {
-            Log.d(TAG, T_VAL + " Barrier detected but no active session — ignoring [" + beaconName + "]");
+            Log.d(TAG, T_VAL + " Barrier detected — no active session, ignoring [" + beaconName + "]");
             return;
         }
 
+        // Guard 3: cooldown
         long now = System.currentTimeMillis();
-        if (now - lastValidationTriggerMs < config.getValidationCooldownMs()) return;
+        if (now - lastBarrierEvalMs < config.getValidationCooldownMs()) return;
 
+        // Guard 4: beacon in configured barrier list
         if (!isNearBarrier(beaconName)) return;
 
-        // Fix 3.3: RSSI threshold — reject far-field detections
+        // Guard 5: RSSI threshold — close-proximity only
         if (rssi < config.getBarrierRssiThreshold()) {
-            Log.d(TAG, T_VAL + " Barrier " + beaconName + " detected but RSSI too weak: "
+            Log.d(TAG, T_VAL + " Barrier " + beaconName + " RSSI too weak: "
                 + rssi + " < " + config.getBarrierRssiThreshold() + " — ignoring");
             return;
         }
 
-        lastValidationTriggerMs = now;
+        lastBarrierEvalMs = now;
 
-        // Reset session timeout on barrier detection — user is actively using the barrier
-        if (sessionTimeoutFuture != null && !sessionTimeoutFuture.isDone()) {
-            sessionTimeoutFuture.cancel(false);
-            sessionTimeoutFuture = scheduler.schedule(
-                this::endTransportSessionAndRevert,
-                config.getSessionTimeoutMs(), TimeUnit.MILLISECONDS);
+        // Beacon detected — cancel BLE-absent fallback (gap 2.3: BLE is present)
+        cancelBleAbsentFallback();
+
+        // Reset session timeout — user actively at barrier
+        resetSessionTimeout();
+
+        String journeyId = resolveJourneyId(beaconName);
+
+        Log.d(TAG, T_VAL + " Barrier confirmed: " + beaconName
+            + " rssi=" + rssi + " journeyId=" + journeyId
+            + " validationRequired=" + pendingValidationRequired);
+
+        if (!pendingValidationRequired) {
+            // Gap 2.1: CLEAR — clear journey, no interaction required (80–90% of users)
+            Log.d(TAG, T_VAL + " Exit signal CLEAR — clear journey: " + beaconName);
+            GatewayServer gs = gatewayServer;
+            if (gs != null) gs.broadcastExitSignal(beaconName, "CLEAR", "HIGH_CONFIDENCE", journeyId);
+        } else {
+            // Gap 2.1: AMBIGUOUS — journey ambiguous, scan required
+            Log.d(TAG, T_VAL + " Exit signal AMBIGUOUS — scan required: " + beaconName);
+            GatewayServer gs = gatewayServer;
+            if (gs != null) gs.broadcastExitSignal(beaconName, "AMBIGUOUS", "LOW_CONFIDENCE", journeyId);
+            triggerScanValidation(beaconName, journeyId);
         }
-
-        Log.d(TAG, T_VAL + " Barrier proximity confirmed: " + beaconName + " rssi=" + rssi);
-        triggerValidation(beaconName);
     }
 
     public boolean isNearBarrier(String beaconName) {
@@ -260,56 +320,75 @@ public class ValidationController {
     }
 
     // -------------------------------------------------------------------------
-    // NFC success — parallel path to biometric
+    // Gap 2.4: configurable scan validation method (NFC / RFID / OTHER)
+    // Biometric is NOT part of this path.
+    // -------------------------------------------------------------------------
+
+    /**
+     * Activates the configured scan validation method (default: NFC foreground dispatch)
+     * and broadcasts a validation REQUIRED event to WebSocket clients.
+     *
+     * Gap 2.4: method label is read from TransportConfig.getValidationMethod() —
+     * not hardcoded. Deployers can override to "RFID" or "OTHER" via SharedPrefs
+     * without a code rebuild. Current hardware path is NFC via RfidNfcReader.
+     */
+    private void triggerScanValidation(String beaconName, String journeyId) {
+        String method = config.getValidationMethod();
+
+        // Enable NFC/RFID foreground dispatch via LocalBroadcast to MainActivity
+        Intent nfcIntent = new Intent("NFC_ENABLE");
+        nfcIntent.putExtra("journeyId", journeyId);
+        LocalBroadcastManager.getInstance(bleService).sendBroadcast(nfcIntent);
+
+        // Notify WebSocket clients — method label from config
+        GatewayServer gs = gatewayServer;
+        if (gs != null) gs.broadcastValidationEvent(journeyId, "REQUIRED", method);
+
+        Log.d(TAG, T_VAL + " Scan validation triggered [method=" + method + "]"
+            + " journey=" + journeyId + " barrier=" + beaconName);
+    }
+
+    // -------------------------------------------------------------------------
+    // NFC success — unchanged flow, simplified (no race guard needed)
     // -------------------------------------------------------------------------
 
     /**
      * Called by BLEScanService.nfcTagReadReceiver after a card UID is read.
-     *
-     * Race guard: if biometric already consumed this validation, this call is a no-op.
-     * This is the mirror of onBiometricSuccess() — same guard, different broadcast.
+     * NFC is the ONLY validation method — no race guard needed (biometric removed).
      *
      * @param tagId     uppercase hex UID of the card, e.g. "A3F204BC"
-     * @param journeyId journey identifier from the advisory (or beacon name fallback)
+     * @param journeyId journey identifier from the advisory
      */
     public void onNfcSuccess(String tagId, String journeyId) {
-        if (!validationConsumed.compareAndSet(false, true)) {
-            Log.d(TAG, T_BIO + " NFC success ignored — biometric already consumed this validation");
-            return;
-        }
-        Log.d(TAG, T_BIO + " NFC validation succeeded: tagId=" + tagId);
+        Log.d(TAG, T_BIO + " Scan validation succeeded: tagId=" + tagId
+            + " journey=" + journeyId + " method=" + config.getValidationMethod());
         pendingValidationRequired = false;
+        cancelBleAbsentFallback();
 
         GatewayServer gs = gatewayServer;
-        if (gs != null) {
-            gs.broadcastNfcValidationEvent(journeyId, tagId, "SUCCESS");
-        }
-        Log.d(TAG, T_VAL + " NFC Validation completed at journey: " + journeyId);
+        if (gs != null) gs.broadcastNfcValidationEvent(journeyId, tagId, "SUCCESS");
+
+        Log.d(TAG, T_VAL + " Scan validation completed at journey: " + journeyId);
     }
 
     // -------------------------------------------------------------------------
-    // Fix 3.2: Biometric success closes the feedback loop
+    // Biometric — freshness state management only (Phase 2 / Gap 2.3)
+    // Triggered by NetworkProximityMonitor at station arrival, not here.
     // -------------------------------------------------------------------------
 
     /**
-     * Called by MainActivity after successful BiometricPrompt authentication.
+     * Called by BLEScanService.biometricSuccessReceiver after the user completes
+     * the optional pre-journey biometric prompt.
      *
-     * Fix 3.2: clears pendingValidationRequired, records auth time, broadcasts SUCCESS.
-     * Race guard: if NFC already consumed this validation, this call is a no-op.
+     * This records the auth time only.
+     * It does NOT broadcast any barrier or validation event.
+     * It does NOT affect pendingValidationRequired.
+     * Biometric is NOT a barrier step in this design.
      */
-    public void onBiometricSuccess(String beaconName) {
-        if (!validationConsumed.compareAndSet(false, true)) {
-            Log.d(TAG, T_BIO + " Biometric success ignored — NFC already consumed this validation");
-            return;
-        }
-        Log.d(TAG, T_BIO + " Biometric authentication succeeded at: " + beaconName);
-        pendingValidationRequired = false;
-
-        GatewayServer gs = gatewayServer;
-        if (gs != null) {
-            gs.broadcastValidationEvent(beaconName, "SUCCESS");
-        }
-        Log.d(TAG, T_VAL + " Validation completed successfully at barrier: " + beaconName);
+    public void onBiometricSuccess() {
+        Log.d(TAG, T_BIO + " Pre-journey biometric completed — auth time recorded");
+        // Auth time is already recorded by BLEScanService.recordBiometricAuthTime()
+        // Nothing else to do here — biometric is not a validation step
     }
 
     // -------------------------------------------------------------------------
@@ -320,6 +399,7 @@ public class ValidationController {
         cancelAdvisoryTimeout();
         cancelAdvisoryStability();
         cancelSessionTimeout();
+        cancelBleAbsentFallback();
         scheduler.shutdownNow();
     }
 
@@ -327,77 +407,55 @@ public class ValidationController {
     // Private helpers
     // -------------------------------------------------------------------------
 
-    /**
-     * Fix 3.1: checks biometric freshness BEFORE triggering prompt.
-     * Fix 3.7: broadcasts validationReason event with explainability data.
-     * NFC: fires NFC_ENABLE broadcast in parallel with biometric (same journey).
-     * Race guard: resets validationConsumed so the first of the two paths wins.
-     */
-    private void triggerValidation(String beaconName) {
-        // Reset race guard — new validation cycle starts here
-        validationConsumed.set(false);
-
-        boolean biometricFresh = false;
-        String  reason;
-
-        if (biometricManager != null) {
-            biometricFresh = biometricManager.isBiometricFresh(config.getBiometricMaxAgeMs());
-        }
-
-        // Fix 3.7: broadcast reason event for explainability
-        GatewayServer gs = gatewayServer;
-        if (gs != null) {
-            reason = biometricFresh ? "PROXIMITY_VERIFIED" : "BIOMETRIC_REQUIRED";
-            gs.broadcastValidationReasonEvent(beaconName, reason, biometricFresh);
-        }
-
-        // Resolve journeyId: prefer advisory.journeyId, fall back to beaconName
-        String journeyId = (pendingAdvisory != null && pendingAdvisory.journeyId != null
-                            && !pendingAdvisory.journeyId.isEmpty())
+    private String resolveJourneyId(String beaconName) {
+        return (pendingAdvisory != null
+                && pendingAdvisory.journeyId != null
+                && !pendingAdvisory.journeyId.isEmpty())
             ? pendingAdvisory.journeyId
             : beaconName;
+    }
 
-        if (pendingValidationRequired && !biometricFresh) {
-            // Fix 3.1: only prompt if biometric is NOT fresh
-            Log.d(TAG, T_BIO + " Biometric not fresh — requesting authentication at: " + beaconName);
-            BiometricCallback cb = biometricCallback;
-            if (cb != null) {
-                cb.onBiometricRequired();
-            } else {
-                Log.d(TAG, T_BIO + " Activity not in foreground — deferring biometric prompt");
+    // -------------------------------------------------------------------------
+    // Gap 2.3: BLE-absent fallback helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Schedules the BLE-absent fallback timer.
+     * If no BLE beacon is detected within BLE_ABSENT_FALLBACK_MS, broadcasts
+     * exitSignal CLEAR with network-only confidence, so the system works
+     * even when BLE beacons are unavailable at a deployment site.
+     */
+    private void scheduleBleAbsentFallback(String journeyId) {
+        cancelBleAbsentFallback();
+        bleAbsentFallbackFuture = scheduler.schedule(() -> {
+            if (!transportSessionActive) return;
+            Log.w(TAG, T_VAL + " BLE absent fallback — no beacon detected in "
+                + config.getBleAbsentFallbackMs() + "ms, signalling CLEAR via network");
+            GatewayServer gs = gatewayServer;
+            if (gs != null) {
+                gs.broadcastExitSignal(
+                    "NETWORK_ONLY", "CLEAR", "NETWORK_CONFIDENCE",
+                    journeyId != null && !journeyId.isEmpty() ? journeyId : "unknown");
             }
+        }, config.getBleAbsentFallbackMs(), TimeUnit.MILLISECONDS);
+    }
 
-            // Fire NFC in parallel — independent of biometric outcome
-            // The first of the two paths to complete wins via validationConsumed
-            android.content.Intent nfcIntent =
-                new android.content.Intent("NFC_ENABLE");
-            nfcIntent.putExtra("journeyId", journeyId);
-            androidx.localbroadcastmanager.content.LocalBroadcastManager
-                .getInstance(bleService)
-                .sendBroadcast(nfcIntent);
-            Log.d(TAG, T_VAL + " NFC dispatch enabled alongside biometric for journey: " + journeyId);
+    private void cancelBleAbsentFallback() {
+        if (bleAbsentFallbackFuture != null && !bleAbsentFallbackFuture.isDone())
+            bleAbsentFallbackFuture.cancel(false);
+    }
 
-        } else if (biometricFresh) {
-            // Fix 3.1: biometric fresh — skip both prompts, auto-validate
-            Log.d(TAG, T_BIO + " Biometric fresh — skipping prompt, auto-validating at: " + beaconName);
-            onBiometricSuccess(beaconName);
-            return;
+    private void resetSessionTimeout() {
+        if (sessionTimeoutFuture != null && !sessionTimeoutFuture.isDone()) {
+            sessionTimeoutFuture.cancel(false);
         }
-
-        // Broadcast validation REQUIRED event to WebSocket clients
-        if (gs != null) {
-            gs.broadcastValidationEvent(beaconName, "REQUIRED");
-        }
-        Log.d(TAG, T_VAL + " Validation triggered: beaconName=" + beaconName
-            + " journeyId=" + journeyId + " biometricFresh=" + biometricFresh);
+        sessionTimeoutFuture = scheduler.schedule(
+            this::endTransportSessionAndRevert,
+            config.getSessionTimeoutMs(), TimeUnit.MILLISECONDS);
     }
 
     private void resetAdvisoryTimeout() {
-        if (advisoryTimeoutFuture != null && !advisoryTimeoutFuture.isDone()) {
-            advisoryTimeoutFuture.cancel(false);
-        }
-        // Only schedule revert timeout if no active transport session.
-        // Once session starts, session timeout (5 min) controls revert — not advisory timeout.
+        cancelAdvisoryTimeout();
         if (!transportSessionActive) {
             advisoryTimeoutFuture = scheduler.schedule(() -> {
                 Log.w(TAG, T_ADV + " Timeout — no advisory for "
@@ -409,25 +467,23 @@ public class ValidationController {
     }
 
     private void cancelAdvisoryTimeout() {
-        if (advisoryTimeoutFuture != null && !advisoryTimeoutFuture.isDone()) {
+        if (advisoryTimeoutFuture != null && !advisoryTimeoutFuture.isDone())
             advisoryTimeoutFuture.cancel(false);
-        }
     }
 
     private void cancelAdvisoryStability() {
-        if (advisoryStabilityFuture != null && !advisoryStabilityFuture.isDone()) {
+        if (advisoryStabilityFuture != null && !advisoryStabilityFuture.isDone())
             advisoryStabilityFuture.cancel(false);
-        }
     }
 
     private void cancelSessionTimeout() {
-        if (sessionTimeoutFuture != null && !sessionTimeoutFuture.isDone()) {
+        if (sessionTimeoutFuture != null && !sessionTimeoutFuture.isDone())
             sessionTimeoutFuture.cancel(false);
-        }
     }
 
     private synchronized void revertToHotel() {
         rfActivation.setRfDetectionRequired(false);
+        rfActivation.setUserNearStation(false);
         modeController.setMode(DeviceMode.HOTEL);
         pendingValidationRequired = false;
         bleService.applyCurrentMode();

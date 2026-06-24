@@ -31,6 +31,7 @@ import com.hotel.blescanner.motion.MotionAnalyzer;
 import com.hotel.blescanner.motion.MotionState;
 import com.hotel.blescanner.transport.BiometricCallback;
 import com.hotel.blescanner.transport.BiometricManager;
+import com.hotel.blescanner.transport.NetworkProximityMonitor;
 import com.hotel.blescanner.transport.RFActivationController;
 import com.hotel.blescanner.transport.ValidationController;
 import java.io.IOException;
@@ -46,28 +47,36 @@ public class BLEScanService extends Service {
 
     private static final String TAG             = "BLEScanService";
     private static final String T_MODE          = "[MODE]";
-    private static final String T_VAL           = "[VALIDATION]";
     private static final String T_BIO           = "[BIOMETRIC]";
     private static final int    NOTIFICATION_ID = 1;
     private static final String CHANNEL_ID      = "BLEScanChannel";
     private static final String DEMO_SUBSCRIPTION_ID = "hotel-demo-subscription";
 
-    private BluetoothLeScanner bleScanner;
-    private GatewayServer      gatewayServer;
+    // Core BLE + server
+    private BluetoothLeScanner    bleScanner;
+    private GatewayServer         gatewayServer;
     private RFActivationController rfActivation;
 
     // Transport controllers
-    private ValidationController validationController;
-    private BiometricManager     biometricManager;
-    private TransportConfig      transportConfig;
+    private ValidationController   validationController;
+    private BiometricManager        biometricManager;
+    private TransportConfig         transportConfig;
 
+    /**
+     * Gap 2.1: NetworkProximityMonitor — PRIMARY BLE trigger in TRANSPORT mode.
+     * Created when ValidationController commits an EXIT advisory.
+     * Never created in HOTEL mode — zero HOTEL impact.
+     */
+    private NetworkProximityMonitor networkProximityMonitor;
+
+    // Dedup maps — unchanged
     private final Map<String, Long>    lastSeenBeacons = new ConcurrentHashMap<>();
     private final Map<String, Integer> lastRssiValues  = new ConcurrentHashMap<>();
 
     // Mode controller — default = HOTEL
     private final DeviceModeController modeController = new DeviceModeController();
 
-    // Context layer
+    // Context layer — unchanged
     private MotionAnalyzer             motionAnalyzer;
     private BluetoothConnectionMonitor bluetoothMonitor;
     private ContextBuilder             contextBuilder;
@@ -77,11 +86,10 @@ public class BLEScanService extends Service {
     // Static holders — allow MainActivity to interact without binding
     // -------------------------------------------------------------------------
 
-    private static volatile BiometricCallback    biometricCallbackRef       = null;
-    private static volatile ValidationController activeValidationController  = null;
-    private static volatile BiometricManager     activeBiometricManager      = null;
+    private static volatile BiometricCallback    biometricCallbackRef      = null;
+    private static volatile ValidationController activeValidationController = null;
+    private static volatile BiometricManager     activeBiometricManager    = null;
 
-    /** Called by MainActivity.onResume/onPause to register/unregister as BiometricCallback. */
     public static void setBiometricCallbackRef(BiometricCallback callback) {
         biometricCallbackRef = callback;
         if (activeValidationController != null) {
@@ -90,8 +98,9 @@ public class BLEScanService extends Service {
     }
 
     /**
-     * Fix 3.2: called by MainActivity after successful BiometricPrompt to record
-     * the auth timestamp in BiometricManager without needing service binding.
+     * Called by MainActivity after successful pre-journey BiometricPrompt.
+     * Records auth timestamp in BiometricManager without requiring service binding.
+     * Biometric is a pre-journey check only — not a barrier step.
      */
     public static void recordBiometricAuthTime() {
         if (activeBiometricManager != null) {
@@ -111,8 +120,8 @@ public class BLEScanService extends Service {
             boolean simBluetooth = intent.getBooleanExtra("simBluetooth", false);
             boolean simVehicle   = intent.getBooleanExtra("simVehicle",   false);
             if (motionAnalyzer != null) {
-                MotionState motionOverride = simVehicle ? MotionState.VEHICLE : MotionState.STILL;
-                motionAnalyzer.setSimulation(simEnabled && simVehicle, motionOverride, simVehicle ? 50f : 0f);
+                MotionState mo = simVehicle ? MotionState.VEHICLE : MotionState.STILL;
+                motionAnalyzer.setSimulation(simEnabled && simVehicle, mo, simVehicle ? 50f : 0f);
             }
             if (bluetoothMonitor != null) {
                 bluetoothMonitor.setSimulation(simEnabled && simBluetooth, simBluetooth, "Simulated Device");
@@ -121,38 +130,32 @@ public class BLEScanService extends Service {
     };
 
     /**
-     * Fix 3.2: receives BIOMETRIC_SUCCESS from MainActivity after successful
-     * BiometricPrompt, forwards to ValidationController with beaconName.
+     * Phase 2 / Gap 2.3: receives BIOMETRIC_SUCCESS from MainActivity after the
+     * optional pre-journey biometric prompt completes.
+     *
+     * This is NOT a barrier validation completion — it records auth time only.
+     * ValidationController.onBiometricSuccess() does nothing barrier-related.
      */
     private final BroadcastReceiver biometricSuccessReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            String beaconName = intent.getStringExtra("beaconName");
-            Log.d(TAG, T_BIO + " Received BIOMETRIC_SUCCESS for beacon: " + beaconName);
+            Log.d(TAG, T_BIO + " Pre-journey biometric completed");
             if (validationController != null) {
-                validationController.onBiometricSuccess(
-                    beaconName != null ? beaconName : "unknown");
+                validationController.onBiometricSuccess();
             }
         }
     };
 
-    /**
-     * NFC path: receives NFC_TAG_READ from MainActivity after a card UID is read.
-     * Forwards tagId + journeyId to ValidationController.onNfcSuccess().
-     *
-     * This receiver is the NFC mirror of biometricSuccessReceiver.
-     * Both are independent — no shared state between them except the
-     * AtomicBoolean race guard inside ValidationController.
-     */
+    /** NFC tag read — unchanged path, forwarded to ValidationController.onNfcSuccess() */
     private final BroadcastReceiver nfcTagReadReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            String tagId    = intent.getStringExtra("tagId");
+            String tagId     = intent.getStringExtra("tagId");
             String journeyId = intent.getStringExtra("journeyId");
-            Log.d(TAG, "[NFC] Tag read received: tagId=" + tagId + " journey=" + journeyId);
+            Log.d(TAG, "[NFC] Tag read: tagId=" + tagId + " journey=" + journeyId);
             if (validationController != null) {
                 validationController.onNfcSuccess(
-                    tagId    != null ? tagId    : "unknown",
+                    tagId     != null ? tagId     : "unknown",
                     journeyId != null ? journeyId : "unknown");
             }
         }
@@ -172,9 +175,9 @@ public class BLEScanService extends Service {
 
                 if (deviceName == null || deviceName.isEmpty()) return;
 
-                long    now       = System.currentTimeMillis();
-                Long    lastSeen  = lastSeenBeacons.get(deviceName);
-                Integer lastRssi  = lastRssiValues.get(deviceName);
+                long    now      = System.currentTimeMillis();
+                Long    lastSeen = lastSeenBeacons.get(deviceName);
+                Integer lastRssi = lastRssiValues.get(deviceName);
 
                 boolean shouldBroadcast = lastSeen == null || lastRssi == null ||
                                          lastRssi != rssi  || (now - lastSeen) > 200;
@@ -202,12 +205,10 @@ public class BLEScanService extends Service {
                     if (gatewayServer != null) gatewayServer.broadcastBLEEvent(deviceName, rssi);
 
                     // Barrier proximity — TRANSPORT mode only, after all existing logic
-                    // Fix 3.3: pass rssi for threshold check
                     if (validationController != null) {
                         validationController.onBarrierProximity(mappedName, rssi);
                     }
 
-                    // Fix C: broadcast transport debug state to MainActivity
                     broadcastTransportDebugState();
                 }
             } catch (SecurityException e) {
@@ -259,7 +260,9 @@ public class BLEScanService extends Service {
             gatewayServer = new GatewayServer(DEMO_SUBSCRIPTION_ID);
             gatewayServer.start();
 
-            // Context layer — unchanged
+            // ----------------------------------------------------------------
+            // Context detection layer — completely unchanged
+            // ----------------------------------------------------------------
             ContextConfig contextConfig = new ContextConfig(this);
             motionAnalyzer   = new MotionAnalyzer(this, contextConfig);
             bluetoothMonitor = new BluetoothConnectionMonitor(this);
@@ -282,7 +285,9 @@ public class BLEScanService extends Service {
                 }
             }, ScoringConfig.CONTEXT_INTERVAL_MS, ScoringConfig.CONTEXT_INTERVAL_MS, TimeUnit.MILLISECONDS);
 
+            // ----------------------------------------------------------------
             // Transport layer init
+            // ----------------------------------------------------------------
             transportConfig      = new TransportConfig(this);
             biometricManager     = new BiometricManager(this);
             validationController = new ValidationController(modeController, null, this, transportConfig);
@@ -295,7 +300,40 @@ public class BLEScanService extends Service {
             gatewayServer.setValidationController(validationController);
             validationController.setGatewayServer(gatewayServer);
 
-            // Scan lifecycle
+            // ----------------------------------------------------------------
+            // Gap 2.1: NetworkProximityMonitor — PRIMARY BLE trigger in TRANSPORT.
+            // Monitors WiFi SSID to detect station proximity.
+            // Only activates BLE when user is physically at a station.
+            // HOTEL mode: never started, zero impact.
+            // ----------------------------------------------------------------
+            networkProximityMonitor = new NetworkProximityMonitor(
+                this,
+                transportConfig,
+                new NetworkProximityMonitor.StationProximityListener() {
+                    @Override
+                    public void onNearStationDetected(String ssid) {
+                        Log.d(TAG, "[NET] At station: " + ssid + " — enabling BLE");
+                        rfActivation.setUserNearStation(true);
+                        applyCurrentMode();   // will call ensureScanRunning() in TRANSPORT
+                    }
+
+                    @Override
+                    public void onLeftStation() {
+                        Log.d(TAG, "[NET] Left station — disabling BLE");
+                        rfActivation.setUserNearStation(false);
+                        applyCurrentMode();   // will call ensureScanStopped() in TRANSPORT
+                    }
+                },
+                biometricManager,
+                biometricCallbackRef   // may be null if Activity not yet in foreground
+            );
+            // Do NOT start monitor yet — it starts only when TRANSPORT mode activates
+            // (ValidationController.commitAdvisory sets rfDetectionRequired=true)
+            // This prevents any HOTEL-mode WiFi scanning.
+
+            // ----------------------------------------------------------------
+            // BLE scan filters + lifecycle — scan params unchanged
+            // ----------------------------------------------------------------
             try {
                 List<ScanFilter> filters = new ArrayList<>();
                 filters.add(new ScanFilter.Builder().setDeviceName("HotelGate").build());
@@ -308,14 +346,13 @@ public class BLEScanService extends Service {
                 filters.add(new ScanFilter.Builder().setDeviceName("ER26B00004").build());
                 filters.add(new ScanFilter.Builder().setDeviceName("BCPro_212364").build());
 
-                // settings param is ignored — RFActivationController builds settings dynamically
                 ScanSettings placeholder = new ScanSettings.Builder()
                     .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build();
 
                 rfActivation = new RFActivationController(bleScanner, filters, placeholder, scanCallback);
                 validationController.setRfActivation(rfActivation);
 
-                // HOTEL → ensureScanRunning() → identical to original startScan()
+                // HOTEL → ensureScanRunning() → identical to original startScan() call
                 applyCurrentMode();
 
             } catch (SecurityException e) {
@@ -328,36 +365,80 @@ public class BLEScanService extends Service {
 
     /**
      * Single point of scan lifecycle control.
-     * HOTEL     : always running, LOW_LATENCY (original behaviour unchanged).
-     * TRANSPORT : on-demand, BALANCED scan to conserve battery (Fix A).
+     *
+     * HOTEL mode:
+     *   Always running, LOW_LATENCY — original behaviour, completely unchanged.
+     *
+     * TRANSPORT mode (Gap 2.1 — network proximity is PRIMARY trigger):
+     *   BLE scan on  ← userNearStation=true  (set by NetworkProximityMonitor)
+     *   BLE scan off ← userNearStation=false (user left station network)
+     *   rfDetectionRequired controls whether TRANSPORT mode is active — NOT scan on/off.
+     *
+     * Advisory rfDetectionRequired=true  → switch to TRANSPORT, start network monitor
+     * Advisory rfDetectionRequired=false → switch to HOTEL, stop network monitor
+     * Network WiFi match                 → setUserNearStation(true) → ensureScanRunning()
+     * Network WiFi lost                  → setUserNearStation(false) → ensureScanStopped()
      */
     public void applyCurrentMode() {
         if (rfActivation == null) return;
-        Log.d(TAG, T_MODE + " applyCurrentMode: " + modeController.getMode());
+        Log.d(TAG, T_MODE + " applyCurrentMode: " + modeController.getMode()
+            + " rfRequired=" + rfActivation.isRfDetectionRequired()
+            + " nearStation=" + rfActivation.isUserNearStation());
+
         if (modeController.isHotelMode()) {
+            // ----------------------------------------------------------------
+            // HOTEL: always on, LOW_LATENCY — completely unchanged behaviour
+            // ----------------------------------------------------------------
             rfActivation.setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY);
             rfActivation.ensureScanRunning();
+
+            // Stop network monitor if it was running (TRANSPORT→HOTEL revert)
+            if (networkProximityMonitor != null) {
+                networkProximityMonitor.stop();
+            }
+
         } else if (modeController.isTransportMode() || modeController.isHybridMode()) {
-            rfActivation.setScanMode(ScanSettings.SCAN_MODE_BALANCED);    // Fix A
+            // ----------------------------------------------------------------
+            // TRANSPORT: BALANCED scan, activated ONLY by network proximity (Gap 2.1)
+            // ----------------------------------------------------------------
+            rfActivation.setScanMode(ScanSettings.SCAN_MODE_BALANCED);
+
             if (rfActivation.isRfDetectionRequired()) {
-                rfActivation.ensureScanRunning();
+                // Advisory has activated TRANSPORT — start network monitor
+                // Monitor will call setUserNearStation + applyCurrentMode when at station
+                if (networkProximityMonitor != null && !networkProximityMonitor.isNearStation()) {
+                    networkProximityMonitor.start();
+                }
+
+                // BLE scan: on only when user is physically at station
+                if (rfActivation.isUserNearStation()) {
+                    rfActivation.ensureScanRunning();
+                } else {
+                    rfActivation.ensureScanStopped();
+                }
             } else {
+                // rfDetectionRequired=false → stop everything
                 rfActivation.ensureScanStopped();
+                if (networkProximityMonitor != null) {
+                    networkProximityMonitor.stop();
+                }
             }
         }
+
         broadcastTransportDebugState();
     }
 
     @Override
     public void onDestroy() {
         super.onDestroy();
-        if (rfActivation != null)        rfActivation.ensureScanStopped();
-        if (validationController != null) validationController.shutdown();
+        if (rfActivation != null)          rfActivation.ensureScanStopped();
+        if (validationController != null)  validationController.shutdown();
+        if (networkProximityMonitor != null) networkProximityMonitor.stop();
         activeValidationController = null;
         activeBiometricManager     = null;
-        if (contextScheduler != null)    contextScheduler.shutdownNow();
-        if (motionAnalyzer != null)      motionAnalyzer.stop();
-        if (gatewayServer != null)       gatewayServer.stop();
+        if (contextScheduler != null)      contextScheduler.shutdownNow();
+        if (motionAnalyzer != null)        motionAnalyzer.stop();
+        if (gatewayServer != null)         gatewayServer.stop();
         LocalBroadcastManager lbm = LocalBroadcastManager.getInstance(this);
         lbm.unregisterReceiver(simulationReceiver);
         lbm.unregisterReceiver(biometricSuccessReceiver);
@@ -370,7 +451,7 @@ public class BLEScanService extends Service {
     public IBinder onBind(Intent intent) { return null; }
 
     // -------------------------------------------------------------------------
-    // Fix C: broadcast transport debug state to MainActivity debug panel
+    // Debug state broadcast — unchanged structure, new nearStation field added
     // -------------------------------------------------------------------------
 
     private void broadcastTransportDebugState() {
@@ -380,16 +461,16 @@ public class BLEScanService extends Service {
             boolean bioFresh = biometricManager != null && transportConfig != null
                 && biometricManager.isBiometricFresh(transportConfig.getBiometricMaxAgeMs());
             boolean advisoryActive = !modeController.isHotelMode();
+            boolean nearStation    = rfActivation != null && rfActivation.isUserNearStation();
 
             Intent dbg = new Intent("TRANSPORT_DEBUG_UPDATE");
             dbg.putExtra("deviceMode",    modeController.getMode().name());
             dbg.putExtra("sessionActive", sessionActive);
             dbg.putExtra("biometricFresh", bioFresh);
             dbg.putExtra("advisoryActive", advisoryActive);
+            dbg.putExtra("nearStation",   nearStation);
             LocalBroadcastManager.getInstance(this).sendBroadcast(dbg);
-        } catch (Exception e) {
-            // Non-critical — debug only
-        }
+        } catch (Exception ignored) {}
     }
 
     // -------------------------------------------------------------------------

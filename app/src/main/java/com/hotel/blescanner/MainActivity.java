@@ -1,15 +1,12 @@
 package com.hotel.blescanner;
 
 import android.content.BroadcastReceiver;
-import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
-import android.content.ServiceConnection;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
 import android.os.Bundle;
-import android.os.IBinder;
 import android.text.format.Formatter;
 import android.util.Log;
 import android.view.View;
@@ -25,13 +22,12 @@ import androidx.core.content.ContextCompat;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import com.hotel.blescanner.transport.BiometricCallback;
 import com.hotel.blescanner.transport.RfidNfcReader;
-import com.hotel.blescanner.BuildConfig;
 import java.util.concurrent.Executor;
 
 public class MainActivity extends AppCompatActivity implements BiometricCallback {
 
-    private static final String TAG = "MainActivity";
-    private static final int PERMISSION_REQUEST_CODE = 1;
+    private static final String TAG                  = "MainActivity";
+    private static final int    PERMISSION_REQUEST_CODE = 1;
 
     // -------------------------------------------------------------------------
     // Existing beacon UI — unchanged
@@ -57,18 +53,15 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
 
     private boolean isServiceRunning = false;
 
-    // Fix 3.2: tracks the beacon that triggered the current validation so it can
-    // be passed to ValidationController.onBiometricSuccess(beaconName)
-    private volatile String lastValidationBeacon = "unknown";
-
-    // NFC/RFID reader — parallel validation path alongside biometric
+    // NFC/RFID reader — barrier validation path, unchanged
     private RfidNfcReader rfidNfcReader;
 
-    // Fix C: debug transport status TextViews (debug builds only)
+    // Debug transport panel (debug builds only)
     private TextView debugDeviceMode;
     private TextView debugSession;
     private TextView debugBiometric;
     private TextView debugAdvisory;
+    private TextView debugNearStation;
 
     // -------------------------------------------------------------------------
     // Broadcast receivers
@@ -96,36 +89,22 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         }
     };
 
-    // Fix 3.2: receive beaconName from service when a validation is triggered,
-    // so we can pass it back on biometric success
-    private final BroadcastReceiver validationTriggerReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            String beacon = intent.getStringExtra("beaconName");
-            if (beacon != null) {
-                lastValidationBeacon = beacon;
-                Log.d(TAG, "[VALIDATION] Validation triggered at: " + beacon);
-            }
-        }
-    };
-
-    // Fix C: receives transport debug state from BLEScanService for the debug panel
+    // Transport debug panel receiver — updated with nearStation field
     private final BroadcastReceiver transportDebugReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            String  deviceMode   = intent.getStringExtra("deviceMode");
-            boolean sessionActive = intent.getBooleanExtra("sessionActive", false);
-            boolean bioFresh     = intent.getBooleanExtra("biometricFresh", false);
-            boolean advisory     = intent.getBooleanExtra("advisoryActive", false);
-            updateTransportDebugPanel(deviceMode, sessionActive, bioFresh, advisory);
+            String  deviceMode  = intent.getStringExtra("deviceMode");
+            boolean session     = intent.getBooleanExtra("sessionActive",  false);
+            boolean bioFresh    = intent.getBooleanExtra("biometricFresh", false);
+            boolean advisory    = intent.getBooleanExtra("advisoryActive", false);
+            boolean nearStation = intent.getBooleanExtra("nearStation",    false);
+            updateTransportDebugPanel(deviceMode, session, bioFresh, advisory, nearStation);
         }
     };
 
     /**
-     * NFC path: receives NFC_ENABLE from ValidationController (via BLEScanService)
-     * when rfDetectionRequired=true in the advisory.
-     * Calls enableNfcForJourney() on the main thread — NFC foreground dispatch
-     * must be enabled from the main thread while the activity is in the foreground.
+     * NFC_ENABLE from ValidationController — triggers NFC foreground dispatch.
+     * Unchanged from previous implementation.
      */
     private final BroadcastReceiver nfcEnableReceiver = new BroadcastReceiver() {
         @Override
@@ -152,24 +131,22 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         beaconKiosk    = findViewById(R.id.beaconKiosk);
         beaconElevator = findViewById(R.id.beaconElevator);
         beaconRoom     = findViewById(R.id.beaconRoom);
-
         contextMode       = findViewById(R.id.contextMode);
         contextConfidence = findViewById(R.id.contextConfidence);
         contextMotion     = findViewById(R.id.contextMotion);
         contextSpeed      = findViewById(R.id.contextSpeed);
-
         simBluetoothSwitch = findViewById(R.id.simBluetoothSwitch);
         simMotionSwitch    = findViewById(R.id.simMotionSwitch);
 
-        // Fix C: transport debug views (present in layout only in debug builds)
-        debugDeviceMode = findViewById(R.id.debugDeviceMode);
-        debugSession    = findViewById(R.id.debugSession);
-        debugBiometric  = findViewById(R.id.debugBiometric);
-        debugAdvisory   = findViewById(R.id.debugAdvisory);
+        // Debug panel views
+        debugDeviceMode  = findViewById(R.id.debugDeviceMode);
+        debugSession     = findViewById(R.id.debugSession);
+        debugBiometric   = findViewById(R.id.debugBiometric);
+        debugAdvisory    = findViewById(R.id.debugAdvisory);
+        debugNearStation = findViewById(R.id.debugNearStation);
 
         stopButton.setEnabled(false);
         displayIPAddress();
-
         startButton.setOnClickListener(v -> startScanService());
         stopButton.setOnClickListener(v -> stopScanService());
 
@@ -181,17 +158,15 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
             simSection.setVisibility(View.GONE);
         }
 
-        // NFC/RFID reader — initialised once, independent of biometric path
+        // NFC reader — barrier validation path, unchanged
         rfidNfcReader = new RfidNfcReader(this, new RfidNfcReader.RfidResultCallback() {
             @Override
             public void onTagRead(String tagId, String journeyId) {
-                // Disable dispatch immediately so subsequent taps are ignored
                 rfidNfcReader.disableForegroundDispatch();
                 onNfcTagRead(tagId, journeyId);
             }
             @Override
             public void onNfcUnavailable() {
-                // NFC not available or disabled — biometric path continues unaffected
                 Log.w(TAG, "[NFC] NFC not available on this device");
             }
         });
@@ -203,11 +178,10 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     protected void onResume() {
         super.onResume();
         LocalBroadcastManager lbm = LocalBroadcastManager.getInstance(this);
-        lbm.registerReceiver(beaconReceiver,           new IntentFilter("BEACON_UPDATE"));
-        lbm.registerReceiver(contextReceiver,          new IntentFilter("CONTEXT_UPDATE"));
-        lbm.registerReceiver(validationTriggerReceiver, new IntentFilter("VALIDATION_TRIGGER"));
-        lbm.registerReceiver(transportDebugReceiver,   new IntentFilter("TRANSPORT_DEBUG_UPDATE"));
-        lbm.registerReceiver(nfcEnableReceiver,        new IntentFilter("NFC_ENABLE"));
+        lbm.registerReceiver(beaconReceiver,        new IntentFilter("BEACON_UPDATE"));
+        lbm.registerReceiver(contextReceiver,       new IntentFilter("CONTEXT_UPDATE"));
+        lbm.registerReceiver(transportDebugReceiver, new IntentFilter("TRANSPORT_DEBUG_UPDATE"));
+        lbm.registerReceiver(nfcEnableReceiver,     new IntentFilter("NFC_ENABLE"));
         registerBiometricCallback();
     }
 
@@ -217,41 +191,34 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         LocalBroadcastManager lbm = LocalBroadcastManager.getInstance(this);
         lbm.unregisterReceiver(beaconReceiver);
         lbm.unregisterReceiver(contextReceiver);
-        lbm.unregisterReceiver(validationTriggerReceiver);
         lbm.unregisterReceiver(transportDebugReceiver);
         lbm.unregisterReceiver(nfcEnableReceiver);
-        // Always disable NFC dispatch when leaving foreground — prevents stale dispatch
-        if (rfidNfcReader != null) {
-            rfidNfcReader.disableForegroundDispatch();
-        }
+        if (rfidNfcReader != null) rfidNfcReader.disableForegroundDispatch();
         unregisterBiometricCallback();
     }
 
-    /**
-     * Required for NFC foreground dispatch: called by Android when the activity
-     * is already on top (launchMode=singleTop) and a new NFC intent arrives.
-     * Routes the intent to RfidNfcReader for tag extraction.
-     */
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
-        if (rfidNfcReader != null) {
-            rfidNfcReader.handleIntent(intent);
-        }
+        if (rfidNfcReader != null) rfidNfcReader.handleIntent(intent);
     }
 
     // -------------------------------------------------------------------------
-    // BiometricCallback — Fix 3.4 (service-safe), Fix 3.2 (success feedback)
+    // BiometricCallback — Phase 2 / Gap 2.3: pre-journey check only
+    //
+    // This prompt is triggered by NetworkProximityMonitor when the user
+    // arrives at a station. It is NOT triggered at the barrier.
+    // On success: records auth time only — no barrier or validation broadcast.
     // -------------------------------------------------------------------------
 
     @Override
     public void onBiometricRequired() {
-        // Called on scheduler thread — dispatch to main thread
-        runOnUiThread(this::launchBiometricPrompt);
+        // Called on NetworkProximityMonitor thread — dispatch to main thread
+        runOnUiThread(this::launchPreJourneyBiometricPrompt);
     }
 
-    private void launchBiometricPrompt() {
-        Log.d(TAG, "[BIOMETRIC] Launching prompt for barrier: " + lastValidationBeacon);
+    private void launchPreJourneyBiometricPrompt() {
+        Log.d(TAG, "[BIOMETRIC] Launching pre-journey freshness check");
         Executor executor = ContextCompat.getMainExecutor(this);
 
         BiometricPrompt biometricPrompt = new BiometricPrompt(this, executor,
@@ -259,71 +226,63 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
                 @Override
                 public void onAuthenticationSucceeded(@NonNull BiometricPrompt.AuthenticationResult r) {
                     super.onAuthenticationSucceeded(r);
-                    onBiometricSuccess();
+                    onPreJourneyBiometricSuccess();
                 }
-
                 @Override
                 public void onAuthenticationError(int errorCode, @NonNull CharSequence errString) {
                     super.onAuthenticationError(errorCode, errString);
-                    Log.w(TAG, "[BIOMETRIC] Error: " + errString);
-                    Toast.makeText(MainActivity.this,
-                        "Authentication failed: " + errString, Toast.LENGTH_SHORT).show();
+                    // Non-blocking — user can still proceed through barrier via NFC
+                    Log.w(TAG, "[BIOMETRIC] Pre-journey check skipped: " + errString);
                 }
-
                 @Override
                 public void onAuthenticationFailed() {
                     super.onAuthenticationFailed();
-                    Log.w(TAG, "[BIOMETRIC] Authentication attempt failed");
+                    Log.w(TAG, "[BIOMETRIC] Pre-journey attempt failed");
                 }
             });
 
         biometricPrompt.authenticate(
             new BiometricPrompt.PromptInfo.Builder()
-                .setTitle("Identity Verification")
-                .setSubtitle("Verify your identity to proceed")
-                .setNegativeButtonText("Cancel")
+                .setTitle("Journey Verification")
+                .setSubtitle("Verify your identity before travelling")
+                .setNegativeButtonText("Skip")
                 .build());
     }
 
-    private void onBiometricSuccess() {
-        Log.d(TAG, "[BIOMETRIC] Success at barrier: " + lastValidationBeacon);
-        // Fix 3.2: record auth time in BiometricManager via service static method
+    /**
+     * Phase 2: pre-journey biometric success.
+     * Records the auth timestamp ONLY.
+     * Does NOT broadcast any barrier event.
+     * Does NOT affect pendingValidationRequired.
+     * Biometric is NOT a barrier step.
+     */
+    private void onPreJourneyBiometricSuccess() {
+        Log.d(TAG, "[BIOMETRIC] Pre-journey verification succeeded");
+        // Record auth time via static service method — no binding needed
         BLEScanService.recordBiometricAuthTime();
-        // Fix 3.2: notify ValidationController with beaconName so it broadcasts SUCCESS
+        // Notify service for logging only — ValidationController.onBiometricSuccess()
+        // does nothing barrier-related in the new design
         if (isServiceRunning) {
-            Intent intent = new Intent("BIOMETRIC_SUCCESS");
-            intent.putExtra("beaconName", lastValidationBeacon);
-            LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
+            LocalBroadcastManager.getInstance(this)
+                .sendBroadcast(new Intent("BIOMETRIC_SUCCESS"));
         }
         Toast.makeText(this, "Identity verified", Toast.LENGTH_SHORT).show();
     }
 
     // -------------------------------------------------------------------------
-    // NFC path — parallel to biometric, fully independent
+    // NFC barrier validation path — unchanged
     // -------------------------------------------------------------------------
 
-    /**
-     * Called by nfcEnableReceiver when ValidationController fires NFC_ENABLE.
-     * Enables NFC foreground dispatch scoped to this journey.
-     * LocalBroadcastManager delivers on the main thread so NfcAdapter
-     * foreground dispatch is always enabled from the correct thread.
-     */
     private void enableNfcForJourney(String journeyId) {
         if (rfidNfcReader == null) return;
         if (rfidNfcReader.isDispatchEnabled()) {
-            Log.d(TAG, "[NFC] Dispatch already active — ignoring duplicate enable for: " + journeyId);
+            Log.d(TAG, "[NFC] Dispatch already active for: " + journeyId);
             return;
         }
-        Log.d(TAG, "[NFC] Foreground dispatch enabled for journey: " + journeyId);
+        Log.d(TAG, "[NFC] Enabling foreground dispatch for journey: " + journeyId);
         rfidNfcReader.enableForegroundDispatch(journeyId);
     }
 
-    /**
-     * Called by RfidNfcReader.RfidResultCallback.onTagRead after a card is read.
-     * Mirrors onBiometricSuccess() in structure — sends NFC_TAG_READ LocalBroadcast
-     * that BLEScanService.nfcTagReadReceiver picks up and forwards to ValidationController.
-     * The AtomicBoolean race guard in ValidationController ensures only one path wins.
-     */
     private void onNfcTagRead(String tagId, String journeyId) {
         Log.d(TAG, "[NFC] Tag read: " + tagId + " journey: " + journeyId);
         if (isServiceRunning) {
@@ -336,21 +295,19 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     }
 
     // -------------------------------------------------------------------------
-    // Fix C: Transport debug panel (debug builds only)
+    // Debug panel — updated with nearStation field
     // -------------------------------------------------------------------------
 
     private void updateTransportDebugPanel(String mode, boolean session,
-                                           boolean bioFresh, boolean advisory) {
+                                           boolean bioFresh, boolean advisory,
+                                           boolean nearStation) {
         if (!BuildConfig.DEBUG) return;
         runOnUiThread(() -> {
-            if (debugDeviceMode != null)
-                debugDeviceMode.setText("[MODE]      " + (mode != null ? mode : "--"));
-            if (debugSession != null)
-                debugSession.setText(   "[SESSION]   " + (session  ? "ACTIVE"   : "IDLE"));
-            if (debugBiometric != null)
-                debugBiometric.setText( "[BIOMETRIC] " + (bioFresh ? "FRESH"    : "REQUIRED"));
-            if (debugAdvisory != null)
-                debugAdvisory.setText(  "[ADVISORY]  " + (advisory ? "ACTIVE"   : "NONE"));
+            if (debugDeviceMode  != null) debugDeviceMode.setText( "[MODE]        " + (mode != null ? mode : "--"));
+            if (debugSession     != null) debugSession.setText(    "[SESSION]     " + (session     ? "ACTIVE"   : "IDLE"));
+            if (debugBiometric   != null) debugBiometric.setText(  "[BIOMETRIC]   " + (bioFresh    ? "FRESH"    : "STALE"));
+            if (debugAdvisory    != null) debugAdvisory.setText(   "[ADVISORY]    " + (advisory    ? "ACTIVE"   : "NONE"));
+            if (debugNearStation != null) debugNearStation.setText("[AT STATION]  " + (nearStation ? "YES"      : "NO"));
         });
     }
 
@@ -406,8 +363,7 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     private void startScanService() {
         try {
             Log.d(TAG, "[MODE] Starting service...");
-            Intent serviceIntent = new Intent(this, BLEScanService.class);
-            ContextCompat.startForegroundService(this, serviceIntent);
+            ContextCompat.startForegroundService(this, new Intent(this, BLEScanService.class));
             isServiceRunning = true;
             startButton.setEnabled(false);
             stopButton.setEnabled(true);
@@ -438,11 +394,9 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     // -------------------------------------------------------------------------
 
     private void displayIPAddress() {
-        WifiManager wifiManager =
-            (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
-        WifiInfo wifiInfo = wifiManager.getConnectionInfo();
-        String ip = Formatter.formatIpAddress(wifiInfo.getIpAddress());
-        ipAddressText.setText("Server: http://" + ip + ":8080");
+        WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
+        WifiInfo wi = wm.getConnectionInfo();
+        ipAddressText.setText("Server: http://" + Formatter.formatIpAddress(wi.getIpAddress()) + ":8080");
     }
 
     private void checkPermissions() {
@@ -453,30 +407,15 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
             android.Manifest.permission.POST_NOTIFICATIONS
         };
         boolean allGranted = true;
-        for (String permission : permissions) {
-            if (ContextCompat.checkSelfPermission(this, permission)
+        for (String p : permissions) {
+            if (ContextCompat.checkSelfPermission(this, p)
                     != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                allGranted = false;
-                break;
+                allGranted = false; break;
             }
         }
-        if (!allGranted) {
-            ActivityCompat.requestPermissions(this, permissions, PERMISSION_REQUEST_CODE);
-        }
+        if (!allGranted) ActivityCompat.requestPermissions(this, permissions, PERMISSION_REQUEST_CODE);
     }
 
-    // -------------------------------------------------------------------------
-    // BiometricCallback registration — static holder pattern
-    // -------------------------------------------------------------------------
-
-    private void registerBiometricCallback() {
-        // Always register — the service may be running even if isServiceRunning flag
-        // was lost due to activity recreation. setBiometricCallbackRef is safe to call
-        // when no service is running (it just stores the ref for later).
-        BLEScanService.setBiometricCallbackRef(this);
-    }
-
-    private void unregisterBiometricCallback() {
-        BLEScanService.setBiometricCallbackRef(null);
-    }
+    private void registerBiometricCallback()   { BLEScanService.setBiometricCallbackRef(this); }
+    private void unregisterBiometricCallback() { BLEScanService.setBiometricCallbackRef(null); }
 }
