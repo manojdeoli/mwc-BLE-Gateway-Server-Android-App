@@ -91,6 +91,11 @@ public class GatewayServer extends NanoWSD {
         this.beaconConfigManager = manager;
     }
 
+    /** Returns true if at least one WebSocket client is currently connected. */
+    public boolean hasConnectedClients() {
+        return !webClients.isEmpty();
+    }
+
     // -------------------------------------------------------------------------
     // HTTP — unchanged
     // -------------------------------------------------------------------------

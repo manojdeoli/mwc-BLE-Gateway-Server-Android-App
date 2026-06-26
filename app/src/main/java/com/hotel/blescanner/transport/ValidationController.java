@@ -512,18 +512,35 @@ public class ValidationController {
     }
 
     /**
-     * Called by BLEScanService.biometricSuccessReceiver after biometric succeeds.
+     * Called by BLEScanService.biometricSuccessReceiver after biometric succeeds,
+     * OR called directly from triggerBiometricValidation() when freshness check passes.
      * Broadcasts a validation SUCCESS event over WebSocket so React advances
      * Steps 4 and 5 on the ValidationTimeline.
+     * Retries once after 2 seconds if WebSocket is mid-reconnect.
      */
     public void onBiometricValidationSuccess() {
         String journeyId = resolveJourneyId("unknown");
         Log.d(TAG, T_BIO + " Biometric validation succeeded — journey=" + journeyId);
         pendingValidationRequired = false;
         cancelBleAbsentFallback();
+        broadcastBiometricSuccessWithRetry(journeyId, 0);
+    }
+
+    private void broadcastBiometricSuccessWithRetry(String journeyId, int attempt) {
         GatewayServer gs = gatewayServer;
-        if (gs != null) gs.broadcastBiometricValidationEvent(journeyId, "SUCCESS");
-        Log.d(TAG, T_VAL + " Biometric validation broadcast complete: " + journeyId);
+        if (gs != null && gs.hasConnectedClients()) {
+            gs.broadcastBiometricValidationEvent(journeyId, "SUCCESS");
+            Log.d(TAG, T_VAL + " Biometric validation broadcast complete: " + journeyId);
+        } else if (attempt < 3) {
+            // WebSocket may be mid-reconnect — retry after 2 seconds
+            Log.d(TAG, T_VAL + " No WS clients yet — retrying biometric broadcast in 2s (attempt "
+                + (attempt + 1) + ")");
+            scheduler.schedule(
+                () -> broadcastBiometricSuccessWithRetry(journeyId, attempt + 1),
+                2, TimeUnit.SECONDS);
+        } else {
+            Log.w(TAG, T_VAL + " Biometric broadcast failed after 3 attempts — no clients connected");
+        }
     }
 
     /**
