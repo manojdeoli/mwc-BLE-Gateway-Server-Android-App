@@ -118,12 +118,14 @@ public class BLEScanService extends Service {
     // Broadcast receivers
     // -------------------------------------------------------------------------
 
-    /** Pre-journey biometric — unchanged */
+    /** Pre-journey biometric — now routes to validation success when in TRANSPORT mode */
     private final BroadcastReceiver biometricSuccessReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            Log.d(TAG, T_BIO + " Pre-journey biometric completed");
-            if (validationController != null) validationController.onBiometricSuccess();
+            Log.d(TAG, T_BIO + " Biometric succeeded");
+            if (validationController != null) {
+                validationController.onBiometricValidationSuccess();
+            }
         }
     };
 

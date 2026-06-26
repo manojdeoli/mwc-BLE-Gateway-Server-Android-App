@@ -197,6 +197,17 @@ public class GatewayServer extends NanoWSD {
         }).start();
     }
 
+    /** Broadcasts a biometric validation event — same schema as NFC, method=BIOMETRIC. */
+    public void broadcastBiometricValidationEvent(String journeyId, String status) {
+        new Thread(() -> {
+            try {
+                broadcastToAllClients(gson.toJson(new BiometricValidationEvent(journeyId, status)));
+            } catch (Exception e) {
+                Log.e(TAG, "[BIOMETRIC] Error broadcasting biometric validation event", e);
+            }
+        }).start();
+    }
+
     // -------------------------------------------------------------------------
     // WebSocket inner class
     // -------------------------------------------------------------------------
@@ -344,6 +355,17 @@ public class GatewayServer extends NanoWSD {
         final long   timestamp = System.currentTimeMillis();
         NfcValidationEvent(String journeyId, String tagId, String status) {
             this.journeyId = journeyId; this.tagId = tagId; this.status = status;
+        }
+    }
+
+    private static class BiometricValidationEvent {
+        final String eventType = "validation";
+        final String status;
+        final String method    = "BIOMETRIC";
+        final String journeyId;
+        final long   timestamp = System.currentTimeMillis();
+        BiometricValidationEvent(String journeyId, String status) {
+            this.journeyId = journeyId; this.status = status;
         }
     }
 }

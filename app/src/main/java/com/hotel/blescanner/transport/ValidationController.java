@@ -196,6 +196,10 @@ public class ValidationController {
             modeController.setMode(DeviceMode.TRANSPORT);
             startTransportSession(resolveJourneyId(advisory.journeyId != null
                 ? advisory.journeyId : ""));
+            // Trigger biometric validation — in demo this is the identity
+            // verification step (Step 4). On success, broadcasts a validation
+            // SUCCESS event to React via WebSocket, completing Steps 4 and 5.
+            triggerBiometricValidation();
         } else {
             rfActivation.setRfDetectionRequired(false);
             rfActivation.setUserNearStation(false);  // clear station flag when transport deactivates
@@ -472,6 +476,38 @@ public class ValidationController {
     // -------------------------------------------------------------------------
     // Simulation helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Triggers the biometric prompt for identity validation.
+     * Called when advisory commits to TRANSPORT mode.
+     * On success, onBiometricValidationSuccess() broadcasts a validation
+     * SUCCESS event to React via WebSocket — completing Steps 4 and 5.
+     */
+    private void triggerBiometricValidation() {
+        BiometricCallback cb = biometricCallback;
+        if (cb != null) {
+            Log.d(TAG, T_BIO + " Requesting biometric validation for journey: "
+                + resolveJourneyId(""));
+            cb.onBiometricRequired();
+        } else {
+            Log.w(TAG, T_BIO + " No biometric callback registered — Activity not in foreground");
+        }
+    }
+
+    /**
+     * Called by BLEScanService.biometricSuccessReceiver after biometric succeeds.
+     * Broadcasts a validation SUCCESS event over WebSocket so React advances
+     * Steps 4 and 5 on the ValidationTimeline.
+     */
+    public void onBiometricValidationSuccess() {
+        String journeyId = resolveJourneyId("unknown");
+        Log.d(TAG, T_BIO + " Biometric validation succeeded — journey=" + journeyId);
+        pendingValidationRequired = false;
+        cancelBleAbsentFallback();
+        GatewayServer gs = gatewayServer;
+        if (gs != null) gs.broadcastBiometricValidationEvent(journeyId, "SUCCESS");
+        Log.d(TAG, T_VAL + " Biometric validation broadcast complete: " + journeyId);
+    }
 
     /**
      * Triggers a synthetic barrier proximity event using the first configured

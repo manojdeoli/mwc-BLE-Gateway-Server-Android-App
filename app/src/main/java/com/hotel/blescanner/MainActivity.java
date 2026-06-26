@@ -196,11 +196,11 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
 
     @Override
     public void onBiometricRequired() {
-        runOnUiThread(this::launchPreJourneyBiometricPrompt);
+        runOnUiThread(this::launchBiometricValidationPrompt);
     }
 
-    private void launchPreJourneyBiometricPrompt() {
-        Log.d(TAG, "[BIOMETRIC] Launching pre-journey freshness check");
+    private void launchBiometricValidationPrompt() {
+        Log.d(TAG, "[BIOMETRIC] Launching identity validation prompt");
         Executor executor = ContextCompat.getMainExecutor(this);
 
         BiometricPrompt biometricPrompt = new BiometricPrompt(this, executor,
@@ -208,30 +208,30 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
                 @Override
                 public void onAuthenticationSucceeded(@NonNull BiometricPrompt.AuthenticationResult r) {
                     super.onAuthenticationSucceeded(r);
-                    onPreJourneyBiometricSuccess();
+                    onBiometricValidationSuccess();
                 }
                 @Override
                 public void onAuthenticationError(int errorCode, @NonNull CharSequence errString) {
                     super.onAuthenticationError(errorCode, errString);
-                    Log.w(TAG, "[BIOMETRIC] Pre-journey check skipped: " + errString);
+                    Log.w(TAG, "[BIOMETRIC] Validation skipped: " + errString);
                 }
                 @Override
                 public void onAuthenticationFailed() {
                     super.onAuthenticationFailed();
-                    Log.w(TAG, "[BIOMETRIC] Pre-journey attempt failed");
+                    Log.w(TAG, "[BIOMETRIC] Validation attempt failed");
                 }
             });
 
         biometricPrompt.authenticate(
             new BiometricPrompt.PromptInfo.Builder()
-                .setTitle("Journey Verification")
-                .setSubtitle("Verify your identity before travelling")
-                .setNegativeButtonText("Skip")
+                .setTitle("Identity Verification")
+                .setSubtitle("Verify your identity to complete journey validation")
+                .setNegativeButtonText("Cancel")
                 .build());
     }
 
-    private void onPreJourneyBiometricSuccess() {
-        Log.d(TAG, "[BIOMETRIC] Pre-journey verification succeeded");
+    private void onBiometricValidationSuccess() {
+        Log.d(TAG, "[BIOMETRIC] Identity validation succeeded");
         BLEScanService.recordBiometricAuthTime();
         if (isServiceRunning) {
             LocalBroadcastManager.getInstance(this)
