@@ -20,7 +20,13 @@ public class TransportConfig {
     // Compile-time defaults
     // -------------------------------------------------------------------------
 
-    /** Beacons that trigger barrier proximity evaluation (pipe-separated). */
+    /** Beacons that trigger barrier proximity evaluation (pipe-separated).
+     * @deprecated Replaced by BeaconConfigManager.isBarrierBeacon().
+     *             BeaconConfigManager is now the single source of truth for barrier
+     *             beacon identity. This value is retained as a last-resort fallback
+     *             only if BeaconConfigManager is not yet initialised.
+     */
+    @Deprecated
     public static final String DEFAULT_BARRIER_BEACONS = "HotelGate|StationGate";
 
     /** Minimum gap (ms) between two consecutive barrier evaluations. */
@@ -107,6 +113,11 @@ public class TransportConfig {
             : null;
     }
 
+    /**
+     * @deprecated Replaced by BeaconConfigManager.isBarrierBeacon().
+     *             Retained as last-resort fallback only.
+     */
+    @Deprecated
     public String[] getBarrierBeacons() {
         String raw = getString("BARRIER_BEACONS", DEFAULT_BARRIER_BEACONS);
         return raw.split("\\|");

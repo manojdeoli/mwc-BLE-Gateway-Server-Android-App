@@ -3,6 +3,7 @@ package com.hotel.blescanner;
 import android.util.Log;
 import com.google.gson.Gson;
 import com.google.gson.JsonSyntaxException;
+import com.hotel.blescanner.config.BeaconConfigManager;
 import com.hotel.blescanner.context.ContextEvent;
 import com.hotel.blescanner.transport.BackendAdvisory;
 import com.hotel.blescanner.transport.ValidationController;
@@ -12,26 +13,82 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 public class GatewayServer extends NanoWSD {
 
-    private static final String TAG  = "GatewayServer";
-    private static final int    PORT = 8080;
+    private static final String TAG      = "GatewayServer";
+    private static final String T_CONFIG = "[CONFIG]";
+    private static final int    PORT     = 8080;
 
     private final Map<String, WebSocket> webClients   = new ConcurrentHashMap<>();
     private final Map<String, BLEData>   bleDataStore = new ConcurrentHashMap<>();
     private final Gson   gson   = new Gson();
     private final String userId;
 
+    /**
+     * Periodic ping scheduler — sends a WebSocket ping to every connected client
+     * every 15 seconds to prevent browser-side idle timeout (1006 disconnects).
+     * NanoWSD does not send keepalives by default; without this the browser
+     * closes the connection after its own idle threshold (~30s on most clients).
+     */
+    private final ScheduledExecutorService pingScheduler =
+        Executors.newSingleThreadScheduledExecutor();
+    private ScheduledFuture<?> pingFuture;
+
     private volatile ValidationController validationController;
+
+    /**
+     * Single source of truth for beacon identity and zone mapping.
+     * Replaces the three private methods that were previously hardcoded here:
+     *   isAllowedDevice(), mapDeviceToZone(), mapBeaconToZone().
+     * Set by BLEScanService after BeaconConfigManager is initialised.
+     */
+    private volatile BeaconConfigManager beaconConfigManager;
 
     public GatewayServer(String userId) {
         super(PORT);
         this.userId = userId;
     }
 
+    @Override
+    public void start() throws IOException {
+        super.start();
+        pingFuture = pingScheduler.scheduleAtFixedRate(() -> {
+            for (Map.Entry<String, WebSocket> entry : new HashMap<>(webClients).entrySet()) {
+                try {
+                    WebSocket ws = entry.getValue();
+                    if (ws != null && ws.isOpen()) {
+                        ws.ping(new byte[0]);
+                    } else {
+                        webClients.remove(entry.getKey());
+                    }
+                } catch (IOException e) {
+                    Log.w(TAG, "Ping failed for " + entry.getKey() + " — removing");
+                    webClients.remove(entry.getKey());
+                }
+            }
+        }, 15, 15, TimeUnit.SECONDS);
+        Log.d(TAG, "GatewayServer started with 15s ping keepalive");
+    }
+
+    @Override
+    public void stop() {
+        if (pingFuture != null) pingFuture.cancel(false);
+        pingScheduler.shutdownNow();
+        super.stop();
+        Log.d(TAG, "GatewayServer stopped");
+    }
+
     public void setValidationController(ValidationController controller) {
         this.validationController = controller;
+    }
+
+    public void setBeaconConfigManager(BeaconConfigManager manager) {
+        this.beaconConfigManager = manager;
     }
 
     // -------------------------------------------------------------------------
@@ -65,14 +122,27 @@ public class GatewayServer extends NanoWSD {
     // Broadcast methods
     // -------------------------------------------------------------------------
 
-    /** Unchanged — broadcasts BLE beacon event to all WebSocket clients. */
+    /**
+     * Broadcasts a BLE beacon event to all WebSocket clients.
+     *
+     * Uses BeaconConfigManager for all three previously hardcoded operations:
+     *   isAllowedDevice()  → beaconConfigManager.isAllowedDevice()
+     *   mapDeviceToZone()  → beaconConfigManager.mapToLogicalName()
+     *   mapBeaconToZone()  → beaconConfigManager.getZone()
+     *
+     * WebSocket JSON schema is unchanged:
+     * {"beaconName":"HotelGate","rssi":-55,"zone":"Hotel Entry Gate","timestamp":...}
+     */
     public void broadcastBLEEvent(String beaconName, int rssi) {
         new Thread(() -> {
             try {
-                if (!isAllowedDevice(beaconName)) return;
-                String mappedName = mapDeviceToZone(beaconName);
-                BLEData data = new BLEData(
-                    mappedName, rssi, mapBeaconToZone(mappedName), System.currentTimeMillis());
+                BeaconConfigManager bcm = beaconConfigManager;
+                if (bcm == null || !bcm.isAllowedDevice(beaconName)) return;
+
+                String mappedName = bcm.mapToLogicalName(beaconName);
+                String zone       = bcm.getZone(mappedName);
+
+                BLEData data = new BLEData(mappedName, rssi, zone, System.currentTimeMillis());
                 bleDataStore.put(userId, data);
                 broadcastToAllClients(gson.toJson(data));
             } catch (Exception e) {
@@ -81,7 +151,7 @@ public class GatewayServer extends NanoWSD {
         }).start();
     }
 
-    /** Unchanged — broadcasts mobility context event to all WebSocket clients. */
+    /** Unchanged — broadcasts mobility context event. */
     public void broadcastContextEvent(ContextEvent event) {
         new Thread(() -> {
             try {
@@ -92,41 +162,7 @@ public class GatewayServer extends NanoWSD {
         }).start();
     }
 
-    /**
-     * Gap 2.1: broadcasts an exit signal to all WebSocket clients.
-     *
-     * Vocabulary clarification:
-     *   Device = supporting signal source (network + BLE precision layer).
-     *   Backend = single source of truth and barrier control authority.
-     *
-     * The device emits a signal describing the journey state it observed.
-     * The backend reads this signal and decides whether to open the barrier.
-     * The device NEVER commands hardware directly.
-     *
-     * Format:
-     * {
-     *   "eventType":  "exitSignal",
-     *   "signal":     "CLEAR",
-     *   "confidence": "HIGH_CONFIDENCE",
-     *   "beaconName": "HotelGate",
-     *   "journeyId":  "J001",
-     *   "timestamp":  1712345678910
-     * }
-     *
-     * signal values:
-     *   "CLEAR"     — journey correlation clear, device observed no ambiguity
-     *   "AMBIGUOUS" — journey correlation inconclusive, backend should require scan
-     *
-     * confidence values:
-     *   "HIGH_CONFIDENCE"    — BLE proximity confirmed + backend correlation clear
-     *   "LOW_CONFIDENCE"     — backend correlation ambiguous
-     *   "NETWORK_CONFIDENCE" — Gap 2.3 fallback: BLE absent, network proximity only
-     *
-     * @param beaconName name of the barrier beacon (or "NETWORK_ONLY" for fallback)
-     * @param signal     "CLEAR" or "AMBIGUOUS"
-     * @param confidence "HIGH_CONFIDENCE", "LOW_CONFIDENCE", or "NETWORK_CONFIDENCE"
-     * @param journeyId  correlates with the advisory's journeyId
-     */
+    /** Broadcasts an exit signal (CLEAR or AMBIGUOUS) — unchanged contract. */
     public void broadcastExitSignal(String beaconName, String signal,
                                     String confidence, String journeyId) {
         new Thread(() -> {
@@ -139,23 +175,7 @@ public class GatewayServer extends NanoWSD {
         }).start();
     }
 
-    /**
-     * Phase 4: broadcasts validation lifecycle event (REQUIRED or SUCCESS).
-     * NFC is the only method — method field is always "NFC".
-     *
-     * Format:
-     * {
-     *   "eventType": "validation",
-     *   "status":    "REQUIRED",
-     *   "method":    "NFC",
-     *   "journeyId": "J001",
-     *   "timestamp": 1712345678910
-     * }
-     *
-     * @param journeyId correlates with the advisory's journeyId
-     * @param status    "REQUIRED" or "SUCCESS"
-     * @param method    always "NFC" — biometric removed from barrier flow
-     */
+    /** Broadcasts a validation lifecycle event (REQUIRED/SUCCESS) — unchanged contract. */
     public void broadcastValidationEvent(String journeyId, String status, String method) {
         new Thread(() -> {
             try {
@@ -166,23 +186,7 @@ public class GatewayServer extends NanoWSD {
         }).start();
     }
 
-    /**
-     * Broadcasts an NFC card-read validation SUCCESS event.
-     *
-     * Format:
-     * {
-     *   "eventType": "validation",
-     *   "status":    "SUCCESS",
-     *   "method":    "NFC",
-     *   "journeyId": "J001",
-     *   "tagId":     "A3F204BC",
-     *   "timestamp": 1712345678910
-     * }
-     *
-     * @param journeyId correlates with the advisory
-     * @param tagId     uppercase hex UID of the tapped card
-     * @param status    "SUCCESS" or "FAILED"
-     */
+    /** Broadcasts an NFC card-read validation event — unchanged contract. */
     public void broadcastNfcValidationEvent(String journeyId, String tagId, String status) {
         new Thread(() -> {
             try {
@@ -235,6 +239,22 @@ public class GatewayServer extends NanoWSD {
                 Log.d(TAG, "Client subscribed: " + clientId);
             }
 
+            // Beacon config update from backend (Phase 8)
+            // Detected by presence of "beacons" array alongside optional "version" field.
+            // Distinct from advisory messages which always contain "riskLevel".
+            if (msg.contains("\"beacons\"")) {
+                Log.d(TAG, T_CONFIG + " Beacon config message received");
+                // Route to BLEScanService via the active instance
+                // BLEScanService holds beaconConfigManager and owns the scan restart
+                BLEScanService svc = BLEScanService.getActiveInstance();
+                if (svc != null) {
+                    svc.onBeaconConfigReceived(msg);
+                } else {
+                    Log.w(TAG, T_CONFIG + " BLEScanService not available — config update ignored");
+                }
+                return;  // not an advisory — skip advisory parsing below
+            }
+
             // Advisory parsing — strict Gson, no fragile contains() check
             ValidationController vc = validationController;
             if (vc != null) {
@@ -249,7 +269,9 @@ public class GatewayServer extends NanoWSD {
             }
         }
 
-        @Override protected void onPong(WebSocketFrame pong) {}
+        @Override protected void onPong(WebSocketFrame pong) {
+            Log.d(TAG, "Pong received from " + clientId);
+        }
 
         @Override
         protected void onException(IOException exception) {
@@ -278,37 +300,8 @@ public class GatewayServer extends NanoWSD {
         }
     }
 
-    private boolean isAllowedDevice(String name) {
-        if (name == null) return false;
-        return name.equals("HotelGate")     || name.equals("HotelKiosk")  ||
-               name.equals("HotelElevator") || name.equals("HotelRoom")   ||
-               name.equals("ER26B00001")    || name.equals("ER26B00002")  ||
-               name.equals("ER26B00003")    || name.equals("ER26B00004")  ||
-               name.equals("BCPro_212364");
-    }
-
-    private String mapDeviceToZone(String deviceName) {
-        switch (deviceName) {
-            case "ER26B00001":
-            case "BCPro_212364": return "HotelGate";
-            case "ER26B00002":   return "HotelKiosk";
-            case "ER26B00003":   return "HotelElevator";
-            case "ER26B00004":   return "HotelRoom";
-            default:             return deviceName;
-        }
-    }
-
-    private String mapBeaconToZone(String beaconName) {
-        String lower = beaconName.toLowerCase();
-        if (lower.contains("gate"))     return "Hotel Entry Gate";
-        if (lower.contains("kiosk"))    return "Check-in Kiosk";
-        if (lower.contains("elevator")) return "Elevator Lobby";
-        if (lower.contains("room"))     return "Room 1337";
-        return "Unknown Area";
-    }
-
     // -------------------------------------------------------------------------
-    // Data models
+    // Data models — event schemas unchanged
     // -------------------------------------------------------------------------
 
     private static class BLEData {
@@ -318,51 +311,30 @@ public class GatewayServer extends NanoWSD {
         }
     }
 
-    /**
-     * Gap 2.1: exit signal event — device signal, backend is the control authority.
-     *
-     * signal="CLEAR"     : device observed no ambiguity, backend should open barrier.
-     * signal="AMBIGUOUS" : device observed ambiguity, backend should require a scan.
-     *
-     * Gap 2.3: beaconName="NETWORK_ONLY" with confidence="NETWORK_CONFIDENCE" is
-     * emitted by the BLE-absent fallback when no beacon was detected but the
-     * network confirmed station proximity. Backend decides whether to accept it.
-     */
     private static class ExitSignalEvent {
         final String eventType  = "exitSignal";
         final String beaconName;
-        final String signal;      // "CLEAR" or "AMBIGUOUS"
-        final String confidence;  // "HIGH_CONFIDENCE", "LOW_CONFIDENCE", "NETWORK_CONFIDENCE"
+        final String signal;
+        final String confidence;
         final String journeyId;
         final long   timestamp  = System.currentTimeMillis();
         ExitSignalEvent(String beaconName, String signal, String confidence, String journeyId) {
-            this.beaconName = beaconName;
-            this.signal     = signal;
-            this.confidence = confidence;
-            this.journeyId  = journeyId;
+            this.beaconName = beaconName; this.signal = signal;
+            this.confidence = confidence; this.journeyId = journeyId;
         }
     }
 
-    /**
-     * Gap 2.4: validation event — method label is now passed as a parameter,
-     * not hardcoded. Supports "NFC", "RFID", "OTHER" without code changes.
-     */
     private static class ValidationEvent {
         final String eventType = "validation";
         final String status;
-        final String method;   // "NFC" | "RFID" | "OTHER" — from TransportConfig
+        final String method;
         final String journeyId;
         final long   timestamp = System.currentTimeMillis();
         ValidationEvent(String journeyId, String status, String method) {
-            this.journeyId = journeyId;
-            this.status    = status;
-            this.method    = method;
+            this.journeyId = journeyId; this.status = status; this.method = method;
         }
     }
 
-    /**
-     * NFC card-read validation event — unchanged contract.
-     */
     private static class NfcValidationEvent {
         final String eventType = "validation";
         final String status;
@@ -371,9 +343,7 @@ public class GatewayServer extends NanoWSD {
         final String tagId;
         final long   timestamp = System.currentTimeMillis();
         NfcValidationEvent(String journeyId, String tagId, String status) {
-            this.journeyId = journeyId;
-            this.tagId     = tagId;
-            this.status    = status;
+            this.journeyId = journeyId; this.tagId = tagId; this.status = status;
         }
     }
 }

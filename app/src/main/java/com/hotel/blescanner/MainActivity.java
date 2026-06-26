@@ -11,7 +11,6 @@ import android.text.format.Formatter;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
-import android.widget.Switch;
 import android.widget.TextView;
 import android.widget.Toast;
 import androidx.annotation.NonNull;
@@ -30,7 +29,7 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     private static final int    PERMISSION_REQUEST_CODE = 1;
 
     // -------------------------------------------------------------------------
-    // Existing beacon UI — unchanged
+    // Beacon UI
     // -------------------------------------------------------------------------
 
     private Button   startButton;
@@ -41,19 +40,15 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     private TextView beaconElevator;
     private TextView beaconRoom;
 
-    // Context display UI — unchanged
+    // Context display UI
     private TextView contextMode;
     private TextView contextConfidence;
     private TextView contextMotion;
     private TextView contextSpeed;
 
-    // Simulation toggles — unchanged
-    private Switch simBluetoothSwitch;
-    private Switch simMotionSwitch;
-
     private boolean isServiceRunning = false;
 
-    // NFC/RFID reader — barrier validation path, unchanged
+    // NFC/RFID reader — barrier validation path
     private RfidNfcReader rfidNfcReader;
 
     // Debug transport panel (debug builds only)
@@ -67,7 +62,6 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     // Broadcast receivers
     // -------------------------------------------------------------------------
 
-    // Existing — unchanged
     private final BroadcastReceiver beaconReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -77,7 +71,6 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         }
     };
 
-    // Existing — unchanged
     private final BroadcastReceiver contextReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -89,7 +82,6 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         }
     };
 
-    // Transport debug panel receiver — updated with nearStation field
     private final BroadcastReceiver transportDebugReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -102,10 +94,6 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         }
     };
 
-    /**
-     * NFC_ENABLE from ValidationController — triggers NFC foreground dispatch.
-     * Unchanged from previous implementation.
-     */
     private final BroadcastReceiver nfcEnableReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -123,7 +111,6 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // Existing views — unchanged
         startButton    = findViewById(R.id.startButton);
         stopButton     = findViewById(R.id.stopButton);
         ipAddressText  = findViewById(R.id.ipAddressText);
@@ -135,10 +122,8 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         contextConfidence = findViewById(R.id.contextConfidence);
         contextMotion     = findViewById(R.id.contextMotion);
         contextSpeed      = findViewById(R.id.contextSpeed);
-        simBluetoothSwitch = findViewById(R.id.simBluetoothSwitch);
-        simMotionSwitch    = findViewById(R.id.simMotionSwitch);
 
-        // Debug panel views
+        // Debug panel views — only populated in debug builds
         debugDeviceMode  = findViewById(R.id.debugDeviceMode);
         debugSession     = findViewById(R.id.debugSession);
         debugBiometric   = findViewById(R.id.debugBiometric);
@@ -150,15 +135,16 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         startButton.setOnClickListener(v -> startScanService());
         stopButton.setOnClickListener(v -> stopScanService());
 
+        // Show Transport Debug panel in debug builds only.
+        // Simulation toggles have been removed — simulation is now controlled
+        // entirely from the backend/React via advisory messages.
         View simSection = findViewById(R.id.simSection);
         if (BuildConfig.DEBUG) {
             simSection.setVisibility(View.VISIBLE);
-            setupSimulationToggles();
         } else {
             simSection.setVisibility(View.GONE);
         }
 
-        // NFC reader — barrier validation path, unchanged
         rfidNfcReader = new RfidNfcReader(this, new RfidNfcReader.RfidResultCallback() {
             @Override
             public void onTagRead(String tagId, String journeyId) {
@@ -178,10 +164,10 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     protected void onResume() {
         super.onResume();
         LocalBroadcastManager lbm = LocalBroadcastManager.getInstance(this);
-        lbm.registerReceiver(beaconReceiver,        new IntentFilter("BEACON_UPDATE"));
-        lbm.registerReceiver(contextReceiver,       new IntentFilter("CONTEXT_UPDATE"));
+        lbm.registerReceiver(beaconReceiver,         new IntentFilter("BEACON_UPDATE"));
+        lbm.registerReceiver(contextReceiver,        new IntentFilter("CONTEXT_UPDATE"));
         lbm.registerReceiver(transportDebugReceiver, new IntentFilter("TRANSPORT_DEBUG_UPDATE"));
-        lbm.registerReceiver(nfcEnableReceiver,     new IntentFilter("NFC_ENABLE"));
+        lbm.registerReceiver(nfcEnableReceiver,      new IntentFilter("NFC_ENABLE"));
         registerBiometricCallback();
     }
 
@@ -204,16 +190,12 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     }
 
     // -------------------------------------------------------------------------
-    // BiometricCallback — Phase 2 / Gap 2.3: pre-journey check only
-    //
-    // This prompt is triggered by NetworkProximityMonitor when the user
-    // arrives at a station. It is NOT triggered at the barrier.
-    // On success: records auth time only — no barrier or validation broadcast.
+    // BiometricCallback — pre-journey check only (triggered by NetworkProximityMonitor)
+    // NOT triggered at barrier. On success: records auth time only.
     // -------------------------------------------------------------------------
 
     @Override
     public void onBiometricRequired() {
-        // Called on NetworkProximityMonitor thread — dispatch to main thread
         runOnUiThread(this::launchPreJourneyBiometricPrompt);
     }
 
@@ -231,7 +213,6 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
                 @Override
                 public void onAuthenticationError(int errorCode, @NonNull CharSequence errString) {
                     super.onAuthenticationError(errorCode, errString);
-                    // Non-blocking — user can still proceed through barrier via NFC
                     Log.w(TAG, "[BIOMETRIC] Pre-journey check skipped: " + errString);
                 }
                 @Override
@@ -249,19 +230,9 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
                 .build());
     }
 
-    /**
-     * Phase 2: pre-journey biometric success.
-     * Records the auth timestamp ONLY.
-     * Does NOT broadcast any barrier event.
-     * Does NOT affect pendingValidationRequired.
-     * Biometric is NOT a barrier step.
-     */
     private void onPreJourneyBiometricSuccess() {
         Log.d(TAG, "[BIOMETRIC] Pre-journey verification succeeded");
-        // Record auth time via static service method — no binding needed
         BLEScanService.recordBiometricAuthTime();
-        // Notify service for logging only — ValidationController.onBiometricSuccess()
-        // does nothing barrier-related in the new design
         if (isServiceRunning) {
             LocalBroadcastManager.getInstance(this)
                 .sendBroadcast(new Intent("BIOMETRIC_SUCCESS"));
@@ -270,7 +241,7 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     }
 
     // -------------------------------------------------------------------------
-    // NFC barrier validation path — unchanged
+    // NFC barrier validation path
     // -------------------------------------------------------------------------
 
     private void enableNfcForJourney(String journeyId) {
@@ -295,7 +266,7 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     }
 
     // -------------------------------------------------------------------------
-    // Debug panel — updated with nearStation field
+    // Debug panel — Transport state diagnostic (debug builds only)
     // -------------------------------------------------------------------------
 
     private void updateTransportDebugPanel(String mode, boolean session,
@@ -312,7 +283,7 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     }
 
     // -------------------------------------------------------------------------
-    // Existing beacon + context display — unchanged
+    // Beacon + context display
     // -------------------------------------------------------------------------
 
     private void updateBeaconDisplay(String beaconName, int rssi) {
@@ -337,27 +308,7 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     }
 
     // -------------------------------------------------------------------------
-    // Simulation toggles — unchanged
-    // -------------------------------------------------------------------------
-
-    private void setupSimulationToggles() {
-        simBluetoothSwitch.setOnCheckedChangeListener((btn, isChecked) -> applySimulationState());
-        simMotionSwitch.setOnCheckedChangeListener(   (btn, isChecked) -> applySimulationState());
-    }
-
-    private void applySimulationState() {
-        boolean simBluetooth = simBluetoothSwitch.isChecked();
-        boolean simVehicle   = simMotionSwitch.isChecked();
-        boolean simEnabled   = simBluetooth || simVehicle;
-        Intent intent = new Intent("SIMULATION_UPDATE");
-        intent.putExtra("simEnabled",   simEnabled);
-        intent.putExtra("simBluetooth", simBluetooth);
-        intent.putExtra("simVehicle",   simVehicle);
-        LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
-    }
-
-    // -------------------------------------------------------------------------
-    // Service control — unchanged
+    // Service control
     // -------------------------------------------------------------------------
 
     private void startScanService() {
@@ -367,7 +318,6 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
             isServiceRunning = true;
             startButton.setEnabled(false);
             stopButton.setEnabled(true);
-            applySimulationState();
         } catch (Exception e) {
             Log.e(TAG, "Failed to start service", e);
             Toast.makeText(this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -390,7 +340,7 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     }
 
     // -------------------------------------------------------------------------
-    // Existing helpers — unchanged
+    // Helpers
     // -------------------------------------------------------------------------
 
     private void displayIPAddress() {

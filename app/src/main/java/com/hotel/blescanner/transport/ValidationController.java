@@ -5,9 +5,12 @@ import android.util.Log;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import com.hotel.blescanner.BLEScanService;
 import com.hotel.blescanner.GatewayServer;
+import com.hotel.blescanner.config.BeaconConfigManager;
 import com.hotel.blescanner.config.TransportConfig;
 import com.hotel.blescanner.mode.DeviceMode;
 import com.hotel.blescanner.mode.DeviceModeController;
+import com.hotel.blescanner.motion.MotionAnalyzer;
+import com.hotel.blescanner.motion.MotionState;
 import java.util.Arrays;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -73,6 +76,8 @@ public class ValidationController {
     private       GatewayServer          gatewayServer;
     private       BiometricManager       biometricManager;   // freshness check only
     private volatile BiometricCallback   biometricCallback;  // pre-journey prompt only
+    private       BeaconConfigManager    beaconConfigManager; // barrier beacon lookup
+    private       MotionAnalyzer          motionAnalyzer;      // simulation target
 
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
@@ -88,6 +93,14 @@ public class ValidationController {
     // Barrier state
     private volatile long    lastBarrierEvalMs        = 0L;
     private volatile boolean pendingValidationRequired = false;
+
+    /**
+     * Idempotency guard for simulation (review comment 2.3).
+     * Set to true the first time simulateBarrierProximity() fires in a session.
+     * Reset in endTransportSession() and revertToHotel() so the next session
+     * can trigger simulation again if the advisory includes it.
+     */
+    private volatile boolean simulationBarrierTriggered = false;
 
     /**
      * Gap 2.3: BLE-absent fallback timer.
@@ -110,10 +123,12 @@ public class ValidationController {
         this.config         = config;
     }
 
-    public void setRfActivation(RFActivationController rfActivation)  { this.rfActivation  = rfActivation; }
-    public void setGatewayServer(GatewayServer gs)                     { this.gatewayServer  = gs; }
-    public void setBiometricManager(BiometricManager bm)               { this.biometricManager = bm; }
-    public void setBiometricCallback(BiometricCallback cb)             { this.biometricCallback = cb; }
+    public void setRfActivation(RFActivationController rfActivation)  { this.rfActivation     = rfActivation; }
+    public void setGatewayServer(GatewayServer gs)                     { this.gatewayServer     = gs; }
+    public void setBiometricManager(BiometricManager bm)               { this.biometricManager  = bm; }
+    public void setBiometricCallback(BiometricCallback cb)             { this.biometricCallback  = cb; }
+    public void setBeaconConfigManager(BeaconConfigManager bcm)        { this.beaconConfigManager = bcm; }
+    public void setMotionAnalyzer(MotionAnalyzer ma)                   { this.motionAnalyzer      = ma; }
 
     // -------------------------------------------------------------------------
     // Advisory handling — stability window (Fix 3.5) + ENTRY fast-path (Phase 5)
@@ -177,17 +192,43 @@ public class ValidationController {
 
         if (advisory.rfDetectionRequired) {
             rfActivation.setRfDetectionRequired(true);
+            rfActivation.setUserNearStation(true);
             modeController.setMode(DeviceMode.TRANSPORT);
             startTransportSession(resolveJourneyId(advisory.journeyId != null
                 ? advisory.journeyId : ""));
         } else {
             rfActivation.setRfDetectionRequired(false);
+            rfActivation.setUserNearStation(false);  // clear station flag when transport deactivates
             modeController.setMode(DeviceMode.HOTEL);
             endTransportSession();
         }
 
         bleService.applyCurrentMode();
         Log.d(TAG, T_MODE + " Mode committed: " + modeController.getMode());
+
+        // -----------------------------------------------------------------
+        // Simulation block — runs AFTER mode and session are committed.
+        // (review 2.2: inside commitAdvisory, not applyAdvisory)
+        // Only processed when the advisory carries a simulation field.
+        // -----------------------------------------------------------------
+        if (advisory.simulation != null) {
+
+            // review 2.1: simulateBarrier only when validationRequired=true
+            // review 2.3: idempotency — fire only once per transport session
+            if (advisory.simulation.simulateBarrier
+                    && advisory.validationRequired
+                    && !simulationBarrierTriggered
+                    && transportSessionActive) {
+                simulationBarrierTriggered = true;
+                simulateBarrierProximity(advisory);
+            }
+
+            // review 2.5: motion simulation only while in TRANSPORT mode
+            if (advisory.simulation.simulateMotion != null
+                    && modeController.isTransportMode()) {
+                applyMotionSimulation(advisory.simulation.simulateMotion);
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -211,11 +252,19 @@ public class ValidationController {
 
     private void endTransportSession() {
         if (!transportSessionActive) return;
-        transportSessionActive = false;
+        transportSessionActive     = false;
+        simulationBarrierTriggered = false;  // reset idempotency guard for next session
         cancelSessionTimeout();
         cancelBleAbsentFallback();
         pendingFallbackJourneyId = null;
+        // Clear motion simulation so real sensors take over immediately
+        if (motionAnalyzer != null) {
+            motionAnalyzer.setSimulation(false, MotionState.UNKNOWN, 0f);
+            Log.d(TAG, "[SIMULATION] Motion simulation cleared on session end");
+        }
         Log.d(TAG, T_SES + " Transport session ended");
+        // Notify BLEScanService so any deferred config restart can be applied (refinement 2.5)
+        bleService.onSessionEnded();
     }
 
     private synchronized void endTransportSessionAndRevert() {
@@ -235,7 +284,14 @@ public class ValidationController {
             Log.d(TAG, T_ADV + " WS disconnected — session active, keeping TRANSPORT");
             return;
         }
-        Log.w(TAG, T_ADV + " WS disconnected — no session, reverting to HOTEL");
+        if (pendingAdvisory != null) {
+            // Advisory is in the stability window — do not revert yet.
+            // The stability window will commit shortly; if it times out, the
+            // advisory timeout will revert to HOTEL safely.
+            Log.d(TAG, T_ADV + " WS disconnected — advisory pending, deferring revert");
+            return;
+        }
+        Log.w(TAG, T_ADV + " WS disconnected — no session, no pending advisory, reverting to HOTEL");
         cancelAdvisoryTimeout();
         cancelAdvisoryStability();
         revertToHotel();
@@ -316,6 +372,12 @@ public class ValidationController {
 
     public boolean isNearBarrier(String beaconName) {
         if (beaconName == null) return false;
+        // BeaconConfigManager is the single source of truth for barrier identity.
+        // Falls back to TransportConfig if BeaconConfigManager not yet wired.
+        if (beaconConfigManager != null) {
+            return beaconConfigManager.isBarrierBeacon(beaconName);
+        }
+        // Fallback: TransportConfig.getBarrierBeacons() (deprecated, kept for safety)
         return Arrays.asList(config.getBarrierBeacons()).contains(beaconName);
     }
 
@@ -407,6 +469,50 @@ public class ValidationController {
     // Private helpers
     // -------------------------------------------------------------------------
 
+    // -------------------------------------------------------------------------
+    // Simulation helpers
+    // -------------------------------------------------------------------------
+
+    /**
+     * Triggers a synthetic barrier proximity event using the first configured
+     * barrier beacon name and a close-range simulated RSSI of -50.
+     *
+     * Bypasses the real scan callback — calls onBarrierProximity() directly
+     * so all existing guards (mode, session, cooldown, RSSI threshold) still apply.
+     */
+    private void simulateBarrierProximity(BackendAdvisory advisory) {
+        String beaconName = config.getBarrierBeacons().length > 0
+            ? config.getBarrierBeacons()[0]
+            : "HotelGate";
+        Log.d(TAG, "[SIMULATION] Barrier triggered via advisory — beacon=" + beaconName
+            + " journey=" + advisory.journeyId);
+        onBarrierProximity(beaconName, -50);
+    }
+
+    /**
+     * Applies or disables motion simulation on MotionAnalyzer.
+     * Only called when modeController.isTransportMode() is true (review 2.5).
+     *
+     * @param sim parsed MotionSimulation block from the advisory
+     */
+    private void applyMotionSimulation(BackendAdvisory.MotionSimulation sim) {
+        if (motionAnalyzer == null) return;
+        if (!sim.enabled) {
+            motionAnalyzer.setSimulation(false, MotionState.UNKNOWN, 0f);
+            Log.d(TAG, "[SIMULATION] Motion disabled");
+            return;
+        }
+        MotionState state;
+        String modeStr = sim.mode != null ? sim.mode.toUpperCase() : "";
+        switch (modeStr) {
+            case "WALKING":    state = MotionState.WALKING;  break;
+            case "STATIONARY": state = MotionState.STILL;    break;
+            default:           state = MotionState.VEHICLE;  break;
+        }
+        motionAnalyzer.setSimulation(true, state, sim.speedKmph);
+        Log.d(TAG, "[SIMULATION] Motion enabled: " + sim.mode + " @ " + sim.speedKmph + " km/h");
+    }
+
     private String resolveJourneyId(String beaconName) {
         return (pendingAdvisory != null
                 && pendingAdvisory.journeyId != null
@@ -485,7 +591,12 @@ public class ValidationController {
         rfActivation.setRfDetectionRequired(false);
         rfActivation.setUserNearStation(false);
         modeController.setMode(DeviceMode.HOTEL);
-        pendingValidationRequired = false;
+        pendingValidationRequired  = false;
+        simulationBarrierTriggered = false;  // reset idempotency guard
+        // Clear any active motion simulation when leaving TRANSPORT mode
+        if (motionAnalyzer != null) {
+            motionAnalyzer.setSimulation(false, MotionState.UNKNOWN, 0f);
+        }
         bleService.applyCurrentMode();
         Log.d(TAG, T_MODE + " Reverted to HOTEL mode");
     }

@@ -204,60 +204,6 @@
                 android:background="#E8F5E9"
                 android:layout_marginBottom="16dp" />
 
-            <!-- Simulation toggles -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Simulation Controls"
-                android:textSize="16sp"
-                android:textStyle="bold"
-                android:gravity="center"
-                android:layout_marginBottom="12dp" />
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:background="#FFF9C4"
-                android:padding="8dp"
-                android:layout_marginBottom="4dp">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Simulate Bluetooth Connected"
-                    android:textSize="14sp" />
-
-                <Switch
-                    android:id="@+id/simBluetoothSwitch"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content" />
-            </LinearLayout>
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:background="#FFF9C4"
-                android:padding="8dp"
-                android:layout_marginBottom="24dp">
-
-                <TextView
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:text="Simulate Motion: Vehicle"
-                    android:textSize="14sp" />
-
-                <Switch
-                    android:id="@+id/simMotionSwitch"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content" />
-            </LinearLayout>
-
         </LinearLayout>
 
         <!-- Scan Control Buttons -->

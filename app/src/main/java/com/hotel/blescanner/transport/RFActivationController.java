@@ -34,7 +34,7 @@ public class RFActivationController {
     private static final String TAG = "[RF] RFActivationController";
 
     private final BluetoothLeScanner bleScanner;
-    private final List<ScanFilter>   filters;
+    private       List<ScanFilter>   filters;     // mutable — updated by updateFilters()
     private final ScanCallback       callback;
 
     private volatile boolean scanRunning          = false;
@@ -99,6 +99,17 @@ public class RFActivationController {
         }
     }
 
+    /**
+     * Updates the scan filter list atomically.
+     * Must only be called while scan is stopped (ensureScanStopped() first).
+     * Used by BLEScanService.restartScanFilters() when BeaconConfigManager
+     * receives a new config from the backend.
+     */
+    public void updateFilters(List<ScanFilter> newFilters) {
+        this.filters = newFilters;
+        Log.d(TAG, "Scan filters updated: " + (newFilters != null ? newFilters.size() : 0) + " entries");
+    }
+
     // -------------------------------------------------------------------------
     // Idempotent lifecycle control
     // -------------------------------------------------------------------------
@@ -128,9 +139,12 @@ public class RFActivationController {
                 .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
                 .setReportDelay(0)
                 .build();
-            bleScanner.startScan(filters, settings, callback);
+            // null or empty filters = broad scan (PREFIX entries without knownIdentifiers)
+            List<ScanFilter> activeFilters = (filters != null && !filters.isEmpty()) ? filters : null;
+            bleScanner.startScan(activeFilters, settings, callback);
             scanRunning = true;
-            Log.d(TAG, "BLE scan started [mode=" + scanModeName(currentScanMode) + "]");
+            Log.d(TAG, "BLE scan started [mode=" + scanModeName(currentScanMode)
+                + (activeFilters == null ? " BROAD]" : " filters=" + activeFilters.size() + "]"));
         } catch (SecurityException e) {
             Log.e(TAG, "Permission denied — cannot start scan", e);
         } catch (Exception e) {
