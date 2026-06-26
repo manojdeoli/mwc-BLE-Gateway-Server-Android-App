@@ -49,8 +49,13 @@ public class BLEScanService extends Service {
     private static final String T_BIO           = "[BIOMETRIC]";
     private static final String T_CONFIG        = "[CONFIG]";
     private static final int    NOTIFICATION_ID = 1;
+    private static final int    BIOMETRIC_NOTIFICATION_ID = 2;
     private static final String CHANNEL_ID      = "BLEScanChannel";
+    private static final String BIOMETRIC_CHANNEL_ID = "BiometricChannel";
     private static final String DEMO_SUBSCRIPTION_ID = "hotel-demo-subscription";
+    /** Intent action used by the full-screen notification to trigger biometric prompt. */
+    public static final String ACTION_BIOMETRIC_REQUEST = "com.hotel.blescanner.BIOMETRIC_REQUEST";
+    public static final String EXTRA_JOURNEY_ID         = "journeyId";
 
     // Core BLE + server
     private BluetoothLeScanner     bleScanner;
@@ -489,8 +494,54 @@ public class BLEScanService extends Service {
     private void createNotificationChannel() {
         NotificationChannel ch = new NotificationChannel(
             CHANNEL_ID, "BLE Scan Service", NotificationManager.IMPORTANCE_LOW);
-        ((NotificationManager) getSystemService(NotificationManager.class))
-            .createNotificationChannel(ch);
+        NotificationChannel bioCh = new NotificationChannel(
+            BIOMETRIC_CHANNEL_ID, "Identity Verification", NotificationManager.IMPORTANCE_HIGH);
+        bioCh.setDescription("Tap to verify your identity to complete journey validation");
+        NotificationManager nm = getSystemService(NotificationManager.class);
+        nm.createNotificationChannel(ch);
+        nm.createNotificationChannel(bioCh);
+    }
+
+    /**
+     * Posts a full-screen notification that brings MainActivity to foreground
+     * (even from lock screen) so the biometric prompt can be launched.
+     * Called by ValidationController when biometricCallback is null
+     * (Activity is in background or device is locked).
+     *
+     * @param journeyId passed to MainActivity via intent extra
+     */
+    public void postBiometricNotification(String journeyId) {
+        try {
+            android.app.NotificationManager nm = getSystemService(android.app.NotificationManager.class);
+
+            // Build intent that launches MainActivity and triggers biometric
+            android.content.Intent intent = new android.content.Intent(this, MainActivity.class);
+            intent.setAction(ACTION_BIOMETRIC_REQUEST);
+            intent.putExtra(EXTRA_JOURNEY_ID, journeyId);
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                | android.content.Intent.FLAG_ACTIVITY_SINGLE_TOP);
+
+            android.app.PendingIntent pi = android.app.PendingIntent.getActivity(
+                this, 0, intent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                    | android.app.PendingIntent.FLAG_IMMUTABLE);
+
+            androidx.core.app.NotificationCompat.Builder builder =
+                new androidx.core.app.NotificationCompat.Builder(this, BIOMETRIC_CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_lock_lock)
+                    .setContentTitle("Identity Verification Required")
+                    .setContentText("Tap to verify your identity to complete journey validation")
+                    .setPriority(androidx.core.app.NotificationCompat.PRIORITY_HIGH)
+                    .setCategory(androidx.core.app.NotificationCompat.CATEGORY_CALL)
+                    .setFullScreenIntent(pi, true)   // shows on lock screen
+                    .setAutoCancel(true)
+                    .setContentIntent(pi);
+
+            nm.notify(BIOMETRIC_NOTIFICATION_ID, builder.build());
+            Log.d(TAG, T_BIO + " Biometric notification posted for journey: " + journeyId);
+        } catch (Exception e) {
+            Log.e(TAG, T_BIO + " Failed to post biometric notification", e);
+        }
     }
 
     private Notification createNotification(String text) {

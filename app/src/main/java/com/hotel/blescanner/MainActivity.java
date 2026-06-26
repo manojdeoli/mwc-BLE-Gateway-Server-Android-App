@@ -164,6 +164,17 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         lbm.registerReceiver(transportDebugReceiver, new IntentFilter("TRANSPORT_DEBUG_UPDATE"));
         lbm.registerReceiver(nfcEnableReceiver,      new IntentFilter("NFC_ENABLE"));
         registerBiometricCallback();
+
+        // Handle biometric request from full-screen notification
+        // (app brought to foreground from background or lock screen)
+        Intent intent = getIntent();
+        if (intent != null
+                && BLEScanService.ACTION_BIOMETRIC_REQUEST.equals(intent.getAction())) {
+            Log.d(TAG, "[BIOMETRIC] Launched from notification — launching prompt");
+            // Consume the intent so rotation/resume doesn't re-trigger
+            setIntent(new Intent());
+            runOnUiThread(this::launchBiometricValidationPrompt);
+        }
     }
 
     @Override
@@ -175,13 +186,37 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         lbm.unregisterReceiver(transportDebugReceiver);
         lbm.unregisterReceiver(nfcEnableReceiver);
         if (rfidNfcReader != null) rfidNfcReader.disableForegroundDispatch();
+        // Keep biometric callback registered when going to background —
+        // ValidationController will use postBiometricNotification() if callback
+        // is null, but keeping it registered means foreground-adjacent cases
+        // (e.g. notification shade pulled down) still work directly.
+        // Callback is only cleared on full stop (onStop) to avoid leaking Activity.
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        // Null the callback now that Activity is fully stopped —
+        // BLEScanService.postBiometricNotification() handles the background case.
         unregisterBiometricCallback();
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        registerBiometricCallback();
     }
 
     @Override
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         if (rfidNfcReader != null) rfidNfcReader.handleIntent(intent);
+        // Handle biometric request when Activity is already running (singleTop)
+        if (intent != null
+                && BLEScanService.ACTION_BIOMETRIC_REQUEST.equals(intent.getAction())) {
+            Log.d(TAG, "[BIOMETRIC] onNewIntent biometric request — launching prompt");
+            runOnUiThread(this::launchBiometricValidationPrompt);
+        }
     }
 
     // -------------------------------------------------------------------------

@@ -478,19 +478,36 @@ public class ValidationController {
     // -------------------------------------------------------------------------
 
     /**
-     * Triggers the biometric prompt for identity validation.
-     * Called when advisory commits to TRANSPORT mode.
-     * On success, onBiometricValidationSuccess() broadcasts a validation
-     * SUCCESS event to React via WebSocket — completing Steps 4 and 5.
+     * Triggers biometric validation when advisory commits to TRANSPORT mode.
+     *
+     * Freshness check first:
+     *   If biometric was completed within BIOMETRIC_MAX_AGE_MS (default 30 min),
+     *   skip the prompt and auto-complete validation immediately.
+     *
+     * If not fresh:
+     *   If Activity is in foreground → launch prompt via BiometricCallback.
+     *   If Activity is in background/lock screen → post a full-screen notification
+     *     that brings MainActivity to foreground, which then launches the prompt.
      */
     private void triggerBiometricValidation() {
+        // Freshness check — skip prompt if recently authenticated
+        if (biometricManager != null
+                && biometricManager.isBiometricFresh(config.getBiometricMaxAgeMs())) {
+            Log.d(TAG, T_BIO + " Biometric still fresh — auto-completing validation");
+            onBiometricValidationSuccess();
+            return;
+        }
+
         BiometricCallback cb = biometricCallback;
         if (cb != null) {
-            Log.d(TAG, T_BIO + " Requesting biometric validation for journey: "
-                + resolveJourneyId(""));
+            // Activity is in foreground — launch prompt directly
+            Log.d(TAG, T_BIO + " Requesting biometric validation (foreground)");
             cb.onBiometricRequired();
         } else {
-            Log.w(TAG, T_BIO + " No biometric callback registered — Activity not in foreground");
+            // Activity is in background or lock screen — use full-screen notification
+            // to bring MainActivity to foreground, which then launches the prompt
+            Log.d(TAG, T_BIO + " Activity not in foreground — posting biometric notification");
+            bleService.postBiometricNotification(resolveJourneyId("unknown"));
         }
     }
 
