@@ -131,13 +131,13 @@
             android:background="#F5F5F5"
             android:layout_marginBottom="24dp" />
 
-        <!-- Simulation Controls Section (debug builds only) -->
+        <!-- Transport Debug Section — always visible, shows internal state -->
         <LinearLayout
             android:id="@+id/simSection"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="vertical"
-            android:visibility="gone">
+            android:visibility="visible">
 
             <!-- Transport debug state panel -->
             <TextView

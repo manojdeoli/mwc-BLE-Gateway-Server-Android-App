@@ -135,15 +135,10 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         startButton.setOnClickListener(v -> startScanService());
         stopButton.setOnClickListener(v -> stopScanService());
 
-        // Show Transport Debug panel in debug builds only.
-        // Simulation toggles have been removed — simulation is now controlled
-        // entirely from the backend/React via advisory messages.
+        // Transport Debug panel is always visible — shows MODE/SESSION/BIOMETRIC state.
+        // Simulation toggles have been removed; simulation is controlled via advisory.
         View simSection = findViewById(R.id.simSection);
-        if (BuildConfig.DEBUG) {
-            simSection.setVisibility(View.VISIBLE);
-        } else {
-            simSection.setVisibility(View.GONE);
-        }
+        simSection.setVisibility(View.VISIBLE);
 
         rfidNfcReader = new RfidNfcReader(this, new RfidNfcReader.RfidResultCallback() {
             @Override
@@ -272,7 +267,6 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     private void updateTransportDebugPanel(String mode, boolean session,
                                            boolean bioFresh, boolean advisory,
                                            boolean nearStation) {
-        if (!BuildConfig.DEBUG) return;
         runOnUiThread(() -> {
             if (debugDeviceMode  != null) debugDeviceMode.setText( "[MODE]        " + (mode != null ? mode : "--"));
             if (debugSession     != null) debugSession.setText(    "[SESSION]     " + (session     ? "ACTIVE"   : "IDLE"));
