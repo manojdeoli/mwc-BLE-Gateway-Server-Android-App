@@ -4,7 +4,7 @@ plugins {
 
 android {
     namespace 'com.hotel.blescanner'
-    compileSdk 34
+    compileSdk 35
 
     buildFeatures {
         buildConfig true
@@ -13,7 +13,7 @@ android {
     defaultConfig {
         applicationId "com.hotel.blescanner"
         minSdk 26
-        targetSdk 34
+        targetSdk 35
         versionCode 1
         versionName "1.0"
     }
@@ -41,7 +41,7 @@ dependencies {
     implementation 'com.google.android.material:material:1.9.0'
     implementation 'com.google.code.gson:gson:2.10.1'
     implementation 'androidx.localbroadcastmanager:localbroadcastmanager:1.1.0'
-    implementation 'androidx.biometric:biometric:1.1.0'
+    implementation 'androidx.biometric:biometric:1.2.0-alpha05'
     implementation 'org.nanohttpd:nanohttpd:2.3.1'
     implementation 'org.nanohttpd:nanohttpd-websocket:2.3.1'
     testImplementation 'junit:junit:4.13.2'

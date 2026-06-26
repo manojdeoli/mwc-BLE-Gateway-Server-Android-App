@@ -1,12 +1,16 @@
 package com.hotel.blescanner;
 
+import android.app.NotificationManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.net.Uri;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.text.format.Formatter;
 import android.util.Log;
 import android.view.View;
@@ -393,6 +397,23 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
             }
         }
         if (!allGranted) ActivityCompat.requestPermissions(this, permissions, PERMISSION_REQUEST_CODE);
+
+        // Android 14+: USE_FULL_SCREEN_INTENT requires explicit user grant in Settings.
+        // Without it the biometric notification cannot show on lock screen.
+        // Check and guide user to Settings if not granted.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) { // API 34 = Android 14
+            NotificationManager nm = getSystemService(NotificationManager.class);
+            if (!nm.canUseFullScreenIntent()) {
+                Log.w(TAG, "[BIOMETRIC] USE_FULL_SCREEN_INTENT not granted — directing to Settings");
+                Toast.makeText(this,
+                    "Please allow 'Display over other apps' for lock screen biometric verification",
+                    Toast.LENGTH_LONG).show();
+                Intent settingsIntent = new Intent(
+                    Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                    Uri.parse("package:" + getPackageName()));
+                startActivity(settingsIntent);
+            }
+        }
     }
 
     private void registerBiometricCallback()   { BLEScanService.setBiometricCallbackRef(this); }
