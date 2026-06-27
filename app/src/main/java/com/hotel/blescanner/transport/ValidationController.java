@@ -103,6 +103,13 @@ public class ValidationController {
     private volatile boolean simulationBarrierTriggered = false;
 
     /**
+     * Pending biometric validation result waiting for a WebSocket client to connect.
+     * Set when broadcastBiometricValidationEvent fails due to no connected clients.
+     * Cleared once successfully broadcast. Allows immediate re-send on reconnect.
+     */
+    private volatile String pendingBiometricJourneyId = null;
+
+    /**
      * Gap 2.3: BLE-absent fallback timer.
      * Scheduled when a transport session starts. If no BLE barrier beacon is
      * detected within BLE_ABSENT_FALLBACK_MS (default 30s), the device broadcasts
@@ -522,24 +529,43 @@ public class ValidationController {
         String journeyId = resolveJourneyId("unknown");
         Log.d(TAG, T_BIO + " Biometric validation succeeded — journey=" + journeyId);
         pendingValidationRequired = false;
+        pendingBiometricJourneyId = journeyId;  // store for reconnect re-send
         cancelBleAbsentFallback();
         broadcastBiometricSuccessWithRetry(journeyId, 0);
+    }
+
+    /**
+     * Called by GatewayServer.ClientConnectedListener when a new WebSocket client connects.
+     * Re-sends any pending biometric validation result immediately — handles the case
+     * where the biometric completed while all clients were disconnected (1006 cycle).
+     */
+    public void onClientReconnected() {
+        String journeyId = pendingBiometricJourneyId;
+        if (journeyId != null) {
+            Log.d(TAG, T_BIO + " Client reconnected — re-sending pending biometric result: " + journeyId);
+            GatewayServer gs = gatewayServer;
+            if (gs != null) {
+                gs.broadcastBiometricValidationEvent(journeyId, "SUCCESS");
+                pendingBiometricJourneyId = null;
+                Log.d(TAG, T_VAL + " Pending biometric result sent on reconnect: " + journeyId);
+            }
+        }
     }
 
     private void broadcastBiometricSuccessWithRetry(String journeyId, int attempt) {
         GatewayServer gs = gatewayServer;
         if (gs != null && gs.hasConnectedClients()) {
             gs.broadcastBiometricValidationEvent(journeyId, "SUCCESS");
+            pendingBiometricJourneyId = null;  // clear — successfully sent
             Log.d(TAG, T_VAL + " Biometric validation broadcast complete: " + journeyId);
-        } else if (attempt < 3) {
-            // WebSocket may be mid-reconnect — retry after 2 seconds
-            Log.d(TAG, T_VAL + " No WS clients yet — retrying biometric broadcast in 2s (attempt "
-                + (attempt + 1) + ")");
+        } else if (attempt < 10) {
+            Log.d(TAG, T_VAL + " No WS clients yet — retrying biometric broadcast in 3s (attempt "
+                + (attempt + 1) + "/10)");
             scheduler.schedule(
                 () -> broadcastBiometricSuccessWithRetry(journeyId, attempt + 1),
-                2, TimeUnit.SECONDS);
+                3, TimeUnit.SECONDS);
         } else {
-            Log.w(TAG, T_VAL + " Biometric broadcast failed after 3 attempts — no clients connected");
+            Log.w(TAG, T_VAL + " Biometric broadcast failed after 10 attempts — no clients connected");
         }
     }
 

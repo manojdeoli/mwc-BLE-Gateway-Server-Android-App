@@ -96,6 +96,21 @@ public class GatewayServer extends NanoWSD {
         return !webClients.isEmpty();
     }
 
+    /**
+     * Callback interface — notified when a new WebSocket client connects.
+     * Used by ValidationController to re-send pending validation results
+     * on reconnect without relying on a retry timer.
+     */
+    public interface ClientConnectedListener {
+        void onClientConnected();
+    }
+
+    private volatile ClientConnectedListener clientConnectedListener;
+
+    public void setClientConnectedListener(ClientConnectedListener listener) {
+        this.clientConnectedListener = listener;
+    }
+
     // -------------------------------------------------------------------------
     // HTTP — unchanged
     // -------------------------------------------------------------------------
@@ -233,6 +248,10 @@ public class GatewayServer extends NanoWSD {
                 try { send(gson.toJson(bleDataStore.get(userId))); }
                 catch (IOException e) { Log.e(TAG, "Error sending initial data", e); }
             }
+            // Notify ValidationController so any pending biometric result
+            // can be re-broadcast immediately to this new client
+            ClientConnectedListener ccl = clientConnectedListener;
+            if (ccl != null) ccl.onClientConnected();
         }
 
         @Override

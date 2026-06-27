@@ -293,6 +293,9 @@ public class BLEScanService extends Service {
             gatewayServer.setBeaconConfigManager(beaconConfigManager);
             validationController.setGatewayServer(gatewayServer);
             validationController.setMotionAnalyzer(motionAnalyzer);
+            // Re-send pending biometric result immediately when client reconnects
+            gatewayServer.setClientConnectedListener(
+                () -> validationController.onClientReconnected());
 
             networkProximityMonitor = new NetworkProximityMonitor(
                 this, transportConfig,
