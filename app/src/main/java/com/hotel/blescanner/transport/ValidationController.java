@@ -500,19 +500,18 @@ public class ValidationController {
         // Freshness check — skip prompt if recently authenticated
         if (biometricManager != null
                 && biometricManager.isBiometricFresh(config.getBiometricMaxAgeMs())) {
-            Log.d(TAG, T_BIO + " Biometric still fresh — auto-completing validation");
-            onBiometricValidationSuccess();
+            Log.d(TAG, T_BIO + " Biometric still fresh — auto-completing validation in 1s");
+            // Delay 1 second so React's validation subscriber has time to register
+            // after receiving the advisory and setting up its WebSocket listener
+            scheduler.schedule(() -> onBiometricValidationSuccess(), 1, TimeUnit.SECONDS);
             return;
         }
 
         BiometricCallback cb = biometricCallback;
         if (cb != null) {
-            // Activity is in foreground — launch prompt directly
             Log.d(TAG, T_BIO + " Requesting biometric validation (foreground)");
             cb.onBiometricRequired();
         } else {
-            // Activity is in background or lock screen — use full-screen notification
-            // to bring MainActivity to foreground, which then launches the prompt
             Log.d(TAG, T_BIO + " Activity not in foreground — posting biometric notification");
             bleService.postBiometricNotification(resolveJourneyId("unknown"));
         }
