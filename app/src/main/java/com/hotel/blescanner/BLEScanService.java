@@ -258,7 +258,6 @@ public class BLEScanService extends Service {
             // ----------------------------------------------------------------
             beaconConfigManager = new BeaconConfigManager(this);
             beaconConfigManager.loadConfig();
-            fetchRemoteBeaconConfig(); // overlay remote config if server has one
 
             // ----------------------------------------------------------------
             // Context detection layer — completely unchanged
@@ -289,6 +288,7 @@ public class BLEScanService extends Service {
             // Transport layer init
             // ----------------------------------------------------------------
             transportConfig      = new TransportConfig(this);
+            fetchRemoteBeaconConfig(); // overlay remote config if server has one — after transportConfig is ready
             biometricManager     = new BiometricManager(this);
             validationController = new ValidationController(modeController, null, this, transportConfig);
             activeValidationController = validationController;
