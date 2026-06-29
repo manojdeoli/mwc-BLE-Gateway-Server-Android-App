@@ -120,7 +120,12 @@ public class BLEScanService extends Service {
     }
 
     public static void recordBiometricAuthTime() {
-        if (activeBiometricManager != null) activeBiometricManager.recordAuthTime();
+        if (activeBiometricManager != null) {
+            activeBiometricManager.recordAuthTime();
+            // Refresh debug panel immediately so BIOMETRIC shows FRESH
+            BLEScanService svc = activeInstance;
+            if (svc != null) svc.broadcastTransportDebugState();
+        }
     }
 
     // -------------------------------------------------------------------------

@@ -6,12 +6,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.net.Uri;
-import android.net.wifi.WifiInfo;
-import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
-import android.text.format.Formatter;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
@@ -377,9 +374,29 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     // -------------------------------------------------------------------------
 
     private void displayIPAddress() {
-        WifiManager wm = (WifiManager) getApplicationContext().getSystemService(WIFI_SERVICE);
-        WifiInfo wi = wm.getConnectionInfo();
-        ipAddressText.setText("Server: http://" + Formatter.formatIpAddress(wi.getIpAddress()) + ":8080");
+        String ip = getWifiIpAddress();
+        ipAddressText.setText("Server: http://" + (ip != null ? ip : "unavailable") + ":8080");
+    }
+
+    private String getWifiIpAddress() {
+        try {
+            android.net.ConnectivityManager cm =
+                (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm == null) return null;
+            android.net.Network network = cm.getActiveNetwork();
+            if (network == null) return null;
+            android.net.LinkProperties lp = cm.getLinkProperties(network);
+            if (lp == null) return null;
+            for (android.net.LinkAddress addr : lp.getLinkAddresses()) {
+                java.net.InetAddress inet = addr.getAddress();
+                if (inet instanceof java.net.Inet4Address && !inet.isLoopbackAddress()) {
+                    return inet.getHostAddress();
+                }
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Could not get WiFi IP: " + e.getMessage());
+        }
+        return null;
     }
 
     private void checkPermissions() {
