@@ -131,6 +131,29 @@
             android:background="#F5F5F5"
             android:layout_marginBottom="24dp" />
 
+        <!-- Biometric Status -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Biometric Status"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:gravity="center"
+            android:layout_marginBottom="12dp"
+            android:layout_marginTop="8dp" />
+
+        <TextView
+            android:id="@+id/biometricStatusText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Identity: Not verified"
+            android:textSize="16sp"
+            android:fontFamily="monospace"
+            android:padding="12dp"
+            android:gravity="center"
+            android:background="#F5F5F5"
+            android:layout_marginBottom="24dp" />
+
         <!-- Transport Debug Section — always visible, shows internal state -->
         <LinearLayout
             android:id="@+id/simSection"

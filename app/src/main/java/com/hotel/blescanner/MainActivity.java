@@ -58,6 +58,7 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     private TextView debugBiometric;
     private TextView debugAdvisory;
     private TextView debugNearStation;
+    private TextView biometricStatusText;
 
     // -------------------------------------------------------------------------
     // Broadcast receivers
@@ -130,6 +131,7 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         debugBiometric   = findViewById(R.id.debugBiometric);
         debugAdvisory    = findViewById(R.id.debugAdvisory);
         debugNearStation = findViewById(R.id.debugNearStation);
+        biometricStatusText = findViewById(R.id.biometricStatusText);
 
         stopButton.setEnabled(false);
         displayIPAddress();
@@ -309,6 +311,17 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
             if (debugBiometric   != null) debugBiometric.setText(  "[BIOMETRIC]   " + (bioFresh    ? "FRESH"    : "STALE"));
             if (debugAdvisory    != null) debugAdvisory.setText(   "[ADVISORY]    " + (advisory    ? "ACTIVE"   : "NONE"));
             if (debugNearStation != null) debugNearStation.setText("[AT STATION]  " + (nearStation ? "YES"      : "NO"));
+            if (biometricStatusText != null) {
+                if (bioFresh) {
+                    biometricStatusText.setText("✅ Identity Verified — Biometric Fresh");
+                    biometricStatusText.setBackgroundColor(0xFFE8F5E9); // green tint
+                    biometricStatusText.setTextColor(0xFF2E7D32);
+                } else {
+                    biometricStatusText.setText("🔒 Identity Required — Tap fingerprint at barrier");
+                    biometricStatusText.setBackgroundColor(0xFFFFF3E0); // amber tint
+                    biometricStatusText.setTextColor(0xFFE65100);
+                }
+            }
         });
     }
 
