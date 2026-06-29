@@ -34,7 +34,11 @@ import com.hotel.blescanner.transport.BiometricManager;
 import com.hotel.blescanner.transport.NetworkProximityMonitor;
 import com.hotel.blescanner.transport.RFActivationController;
 import com.hotel.blescanner.transport.ValidationController;
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -249,6 +253,7 @@ public class BLEScanService extends Service {
             // ----------------------------------------------------------------
             beaconConfigManager = new BeaconConfigManager(this);
             beaconConfigManager.loadConfig();
+            fetchRemoteBeaconConfig(); // overlay remote config if server has one
 
             // ----------------------------------------------------------------
             // Context detection layer — completely unchanged
@@ -335,6 +340,64 @@ public class BLEScanService extends Service {
         } catch (IOException e) {
             Log.e(TAG, "Failed to start Gateway Server", e); stopSelf();
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Remote beacon config fetch — runs once at startup on a background thread
+    // Fetches beacon_config.json from the web server (same PC as the web app).
+    // Server URL is read from TransportConfig; falls back to stored/default config
+    // if server is unreachable or returns 404.
+    // -------------------------------------------------------------------------
+
+    private void fetchRemoteBeaconConfig() {
+        String serverUrl = transportConfig.getBeaconConfigServerUrl();
+        if (serverUrl == null || serverUrl.isEmpty()) {
+            Log.d(TAG, T_CONFIG + " No beacon config server URL configured — skipping remote fetch");
+            return;
+        }
+        final String url = serverUrl.replaceAll("/+$", "") + "/config/beacons";
+        Executors.newSingleThreadExecutor().execute(() -> {
+            try {
+                Log.d(TAG, T_CONFIG + " Fetching remote beacon config from: " + url);
+                HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(5000);
+                conn.setRequestMethod("GET");
+                int status = conn.getResponseCode();
+                if (status == 200) {
+                    BufferedReader reader = new BufferedReader(
+                        new InputStreamReader(conn.getInputStream()));
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) sb.append(line);
+                    reader.close();
+                    String json = sb.toString();
+                    boolean applied = beaconConfigManager.updateConfigFromJson(json);
+                    if (applied) {
+                        Log.d(TAG, T_CONFIG + " Remote beacon config applied: v"
+                            + beaconConfigManager.getLoadedVersion());
+                        if (gatewayServer != null)
+                            gatewayServer.setBeaconConfigManager(beaconConfigManager);
+                        if (validationController != null)
+                            validationController.setBeaconConfigManager(beaconConfigManager);
+                    }
+                } else if (status == 404) {
+                    Log.d(TAG, T_CONFIG + " No custom config on server (404) — using defaults");
+                } else {
+                    Log.w(TAG, T_CONFIG + " Remote config fetch returned HTTP " + status);
+                }
+                conn.disconnect();
+            } catch (Exception e) {
+                Log.w(TAG, T_CONFIG + " Remote config fetch failed: " + e.getMessage()
+                    + " — using stored/default config");
+            }
+        });
+    }
+
+    public void onServerUrlReceived(String url) {
+        transportConfig.set("BEACON_CONFIG_SERVER_URL", url);
+        Log.d(TAG, T_CONFIG + " Beacon config server URL stored: " + url);
+        fetchRemoteBeaconConfig();
     }
 
     // -------------------------------------------------------------------------

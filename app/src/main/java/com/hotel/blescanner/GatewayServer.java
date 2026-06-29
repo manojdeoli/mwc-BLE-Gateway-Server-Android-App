@@ -274,6 +274,23 @@ public class GatewayServer extends NanoWSD {
                 Log.d(TAG, "Client subscribed: " + clientId);
             }
 
+            // SERVER_URL message — store in TransportConfig for beacon config fetch
+            if (msg.contains("SERVER_URL")) {
+                try {
+                    com.google.gson.JsonObject obj = gson.fromJson(msg, com.google.gson.JsonObject.class);
+                    if (obj.has("beaconConfigUrl")) {
+                        String url = obj.get("beaconConfigUrl").getAsString();
+                        BLEScanService svc = BLEScanService.getActiveInstance();
+                        if (svc != null) {
+                            svc.onServerUrlReceived(url);
+                        }
+                        Log.d(TAG, "[CONFIG] Beacon config server URL received: " + url);
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to parse SERVER_URL message: " + e.getMessage());
+                }
+            }
+
             // Beacon config update from backend (Phase 8)
             // Detected by presence of "beacons" array alongside optional "version" field.
             // Distinct from advisory messages which always contain "riskLevel".

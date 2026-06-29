@@ -101,6 +101,13 @@ public class TransportConfig {
      */
     public static final int NEAR_STATION_RSSI_THRESHOLD = -70;
 
+    /**
+     * URL of the web server serving beacon_config.json.
+     * Set by START_APP.bat via SharedPreferences, e.g. "http://192.168.1.5:4002".
+     * Empty string = no remote fetch (use stored/default config).
+     */
+    public static final String DEFAULT_BEACON_CONFIG_SERVER_URL = "";
+
     // -------------------------------------------------------------------------
     // SharedPreferences-backed instance
     // -------------------------------------------------------------------------
@@ -130,7 +137,8 @@ public class TransportConfig {
     public long  getSessionTimeoutMs()          { return getLong("SESSION_TIMEOUT_MS",           SESSION_TIMEOUT_MS); }
     public long   getAdvisoryStabilityWindowMs() { return getLong(  "ADVISORY_STABILITY_WINDOW_MS", ADVISORY_STABILITY_WINDOW_MS); }
     public long   getBleAbsentFallbackMs()        { return getLong(  "BLE_ABSENT_FALLBACK_MS",       BLE_ABSENT_FALLBACK_MS); }
-    public String getValidationMethod()           { return getString("VALIDATION_METHOD",            DEFAULT_VALIDATION_METHOD); }
+    public String getBeaconConfigServerUrl()        { return getString("BEACON_CONFIG_SERVER_URL",  DEFAULT_BEACON_CONFIG_SERVER_URL); }
+    public String getValidationMethod()               { return getString("VALIDATION_METHOD",            DEFAULT_VALIDATION_METHOD); }
     public int    getNearStationRssiThreshold()   { return getInt(   "NEAR_STATION_RSSI_THRESHOLD",  NEAR_STATION_RSSI_THRESHOLD); }
 
     /**
