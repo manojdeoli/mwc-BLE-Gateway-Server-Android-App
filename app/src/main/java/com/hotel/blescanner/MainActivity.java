@@ -113,6 +113,11 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
+        // Hide the default ActionBar — the IP address banner serves as the app header
+        if (getSupportActionBar() != null) {
+            getSupportActionBar().hide();
+        }
+
         startButton    = findViewById(R.id.startButton);
         stopButton     = findViewById(R.id.stopButton);
         ipAddressText  = findViewById(R.id.ipAddressText);
@@ -360,7 +365,9 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
             ContextCompat.startForegroundService(this, new Intent(this, BLEScanService.class));
             isServiceRunning = true;
             startButton.setEnabled(false);
+            startButton.setAlpha(0.5f);
             stopButton.setEnabled(true);
+            stopButton.setAlpha(1.0f);
         } catch (Exception e) {
             Log.e(TAG, "Failed to start service", e);
             Toast.makeText(this, "Error: " + e.getMessage(), Toast.LENGTH_LONG).show();
@@ -379,7 +386,9 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         contextSpeed.setText("Speed:      -- km/h");
         isServiceRunning = false;
         startButton.setEnabled(true);
+        startButton.setAlpha(1.0f);
         stopButton.setEnabled(false);
+        stopButton.setAlpha(0.5f);
     }
 
     // -------------------------------------------------------------------------
