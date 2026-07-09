@@ -365,45 +365,41 @@
 
             </LinearLayout>
 
+            <!-- ── Buttons ── -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="14dp"
+                android:layout_marginBottom="12dp">
+
+                <Button
+                    android:id="@+id/startButton"
+                    android:layout_width="0dp"
+                    android:layout_height="52dp"
+                    android:layout_weight="1"
+                    android:text="▶  Start Scanning"
+                    android:textSize="14sp"
+                    android:textColor="#FFFFFF"
+                    android:backgroundTint="#00897B"
+                    android:layout_marginEnd="6dp" />
+
+                <Button
+                    android:id="@+id/stopButton"
+                    android:layout_width="0dp"
+                    android:layout_height="52dp"
+                    android:layout_weight="1"
+                    android:text="■  Stop Scanning"
+                    android:textSize="14sp"
+                    android:textColor="#FFFFFF"
+                    android:backgroundTint="#E53935"
+                    android:alpha="0.5"
+                    android:enabled="false"
+                    android:layout_marginStart="6dp" />
+
+            </LinearLayout>
+
         </LinearLayout>
     </ScrollView>
-
-    <!-- ── Bottom button bar ── -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:background="#FFFFFF"
-        android:paddingTop="10dp"
-        android:paddingBottom="36dp"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:elevation="8dp">
-
-        <Button
-            android:id="@+id/startButton"
-            android:layout_width="0dp"
-            android:layout_height="48dp"
-            android:layout_weight="1"
-            android:text="▶  Start Scanning"
-            android:textSize="14sp"
-            android:textColor="#FFFFFF"
-            android:backgroundTint="#00897B"
-            android:layout_marginEnd="6dp" />
-
-        <Button
-            android:id="@+id/stopButton"
-            android:layout_width="0dp"
-            android:layout_height="48dp"
-            android:layout_weight="1"
-            android:text="■  Stop Scanning"
-            android:textSize="14sp"
-            android:textColor="#FFFFFF"
-            android:backgroundTint="#E53935"
-            android:alpha="0.5"
-            android:enabled="false"
-            android:layout_marginStart="6dp" />
-
-    </LinearLayout>
 
 </LinearLayout>
