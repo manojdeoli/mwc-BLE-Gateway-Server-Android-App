@@ -1,257 +1,360 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#F5F5F5">
 
+    <!-- ── Header bar ── -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="16dp">
+        android:background="#1565C0"
+        android:paddingTop="12dp"
+        android:paddingBottom="12dp"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp">
 
-        <!-- IP Address Banner -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Hotel BLE Scanner"
+            android:textSize="18sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:gravity="center" />
+
         <TextView
             android:id="@+id/ipAddressText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="Server: http://0.0.0.0:8080"
-            android:textSize="18sp"
-            android:textStyle="bold"
-            android:textColor="#2196F3"
+            android:textSize="12sp"
+            android:textColor="#BBDEFB"
             android:gravity="center"
-            android:padding="16dp"
-            android:background="#E3F2FD"
-            android:layout_marginBottom="24dp" />
+            android:layout_marginTop="2dp" />
 
-        <!-- Beacon Status Section -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Beacon Status"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:gravity="center"
-            android:layout_marginBottom="12dp" />
+    </LinearLayout>
 
-        <TextView
-            android:id="@+id/beaconGate"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="HotelGate:     --"
-            android:textSize="16sp"
-            android:fontFamily="monospace"
-            android:padding="8dp"
-            android:background="#F5F5F5"
-            android:layout_marginBottom="4dp" />
+    <!-- ── Start / Stop buttons ── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="10dp"
+        android:background="#FFFFFF"
+        android:elevation="2dp">
 
-        <TextView
-            android:id="@+id/beaconKiosk"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="HotelKiosk:    --"
-            android:textSize="16sp"
-            android:fontFamily="monospace"
-            android:padding="8dp"
-            android:background="#F5F5F5"
-            android:layout_marginBottom="4dp" />
-
-        <TextView
-            android:id="@+id/beaconElevator"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="HotelElevator: --"
-            android:textSize="16sp"
-            android:fontFamily="monospace"
-            android:padding="8dp"
-            android:background="#F5F5F5"
-            android:layout_marginBottom="4dp" />
-
-        <TextView
-            android:id="@+id/beaconRoom"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="HotelRoom:     --"
-            android:textSize="16sp"
-            android:fontFamily="monospace"
-            android:padding="8dp"
-            android:background="#F5F5F5"
-            android:layout_marginBottom="24dp" />
-
-        <!-- Mobility Context Section -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Mobility Context"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:gravity="center"
-            android:layout_marginBottom="12dp" />
-
-        <TextView
-            android:id="@+id/contextMode"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Mode:       --"
-            android:textSize="16sp"
-            android:fontFamily="monospace"
-            android:padding="8dp"
-            android:background="#F5F5F5"
-            android:layout_marginBottom="4dp" />
-
-        <TextView
-            android:id="@+id/contextConfidence"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Confidence: --"
-            android:textSize="16sp"
-            android:fontFamily="monospace"
-            android:padding="8dp"
-            android:background="#F5F5F5"
-            android:layout_marginBottom="4dp" />
-
-        <TextView
-            android:id="@+id/contextMotion"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Motion:     --"
-            android:textSize="16sp"
-            android:fontFamily="monospace"
-            android:padding="8dp"
-            android:background="#F5F5F5"
-            android:layout_marginBottom="4dp" />
-
-        <TextView
-            android:id="@+id/contextSpeed"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Speed:      -- km/h"
-            android:textSize="16sp"
-            android:fontFamily="monospace"
-            android:padding="8dp"
-            android:background="#F5F5F5"
-            android:layout_marginBottom="24dp" />
-
-        <!-- Biometric Status -->
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Biometric Status"
-            android:textSize="16sp"
-            android:textStyle="bold"
-            android:gravity="center"
-            android:layout_marginBottom="12dp"
-            android:layout_marginTop="8dp" />
-
-        <TextView
-            android:id="@+id/biometricStatusText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Identity: Not verified"
-            android:textSize="16sp"
-            android:fontFamily="monospace"
-            android:padding="12dp"
-            android:gravity="center"
-            android:background="#F5F5F5"
-            android:layout_marginBottom="24dp" />
-
-        <!-- Transport Debug Section — always visible, shows internal state -->
-        <LinearLayout
-            android:id="@+id/simSection"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:visibility="visible">
-
-            <!-- Transport debug state panel -->
-            <TextView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="Transport Debug"
-                android:textSize="16sp"
-                android:textStyle="bold"
-                android:gravity="center"
-                android:layout_marginBottom="8dp" />
-
-            <TextView
-                android:id="@+id/debugDeviceMode"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="[MODE]      --"
-                android:textSize="13sp"
-                android:fontFamily="monospace"
-                android:padding="6dp"
-                android:background="#E8F5E9"
-                android:layout_marginBottom="2dp" />
-
-            <TextView
-                android:id="@+id/debugSession"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="[SESSION]   --"
-                android:textSize="13sp"
-                android:fontFamily="monospace"
-                android:padding="6dp"
-                android:background="#E8F5E9"
-                android:layout_marginBottom="2dp" />
-
-            <TextView
-                android:id="@+id/debugBiometric"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="[BIOMETRIC] --"
-                android:textSize="13sp"
-                android:fontFamily="monospace"
-                android:padding="6dp"
-                android:background="#E8F5E9"
-                android:layout_marginBottom="2dp" />
-
-            <TextView
-                android:id="@+id/debugAdvisory"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="[ADVISORY]  --"
-                android:textSize="13sp"
-                android:fontFamily="monospace"
-                android:padding="6dp"
-                android:background="#E8F5E9"
-                android:layout_marginBottom="2dp" />
-
-            <TextView
-                android:id="@+id/debugNearStation"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:text="[AT STATION] --"
-                android:textSize="13sp"
-                android:fontFamily="monospace"
-                android:padding="6dp"
-                android:background="#E8F5E9"
-                android:layout_marginBottom="16dp" />
-
-        </LinearLayout>
-
-        <!-- Scan Control Buttons -->
         <Button
             android:id="@+id/startButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Start Scanning"
-            android:textSize="16sp"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:text="▶  Start"
+            android:textSize="14sp"
             android:textColor="#FFFFFF"
             android:backgroundTint="#2196F3"
-            android:padding="16dp"
-            android:layout_marginBottom="12dp" />
+            android:layout_marginEnd="6dp" />
 
         <Button
             android:id="@+id/stopButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Stop Scanning"
-            android:textSize="16sp"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:text="■  Stop"
+            android:textSize="14sp"
             android:textColor="#FFFFFF"
             android:backgroundTint="#F44336"
-            android:padding="16dp"
             android:alpha="0.5"
-            android:enabled="false" />
+            android:enabled="false"
+            android:layout_marginStart="6dp" />
 
     </LinearLayout>
-</ScrollView>
+
+    <!-- ── Scrollable content ── -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="10dp">
+
+            <!-- Beacon Status -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="BEACON STATUS"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:textColor="#757575"
+                android:letterSpacing="0.1"
+                android:layout_marginBottom="4dp"
+                android:layout_marginTop="4dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="4dp">
+
+                <TextView
+                    android:id="@+id/beaconGate"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Gate: --"
+                    android:textSize="13sp"
+                    android:fontFamily="monospace"
+                    android:padding="8dp"
+                    android:background="#FFFFFF"
+                    android:layout_marginEnd="4dp" />
+
+                <TextView
+                    android:id="@+id/beaconKiosk"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Kiosk: --"
+                    android:textSize="13sp"
+                    android:fontFamily="monospace"
+                    android:padding="8dp"
+                    android:background="#FFFFFF"
+                    android:layout_marginStart="4dp" />
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="10dp">
+
+                <TextView
+                    android:id="@+id/beaconElevator"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Elevator: --"
+                    android:textSize="13sp"
+                    android:fontFamily="monospace"
+                    android:padding="8dp"
+                    android:background="#FFFFFF"
+                    android:layout_marginEnd="4dp" />
+
+                <TextView
+                    android:id="@+id/beaconRoom"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Room: --"
+                    android:textSize="13sp"
+                    android:fontFamily="monospace"
+                    android:padding="8dp"
+                    android:background="#FFFFFF"
+                    android:layout_marginStart="4dp" />
+
+            </LinearLayout>
+
+            <!-- Mobility Context -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="MOBILITY CONTEXT"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:textColor="#757575"
+                android:letterSpacing="0.1"
+                android:layout_marginBottom="4dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="4dp">
+
+                <TextView
+                    android:id="@+id/contextMode"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Mode: --"
+                    android:textSize="13sp"
+                    android:fontFamily="monospace"
+                    android:padding="8dp"
+                    android:background="#FFFFFF"
+                    android:layout_marginEnd="4dp" />
+
+                <TextView
+                    android:id="@+id/contextConfidence"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Conf: --"
+                    android:textSize="13sp"
+                    android:fontFamily="monospace"
+                    android:padding="8dp"
+                    android:background="#FFFFFF"
+                    android:layout_marginStart="4dp" />
+
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginBottom="10dp">
+
+                <TextView
+                    android:id="@+id/contextMotion"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Motion: --"
+                    android:textSize="13sp"
+                    android:fontFamily="monospace"
+                    android:padding="8dp"
+                    android:background="#FFFFFF"
+                    android:layout_marginEnd="4dp" />
+
+                <TextView
+                    android:id="@+id/contextSpeed"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="Speed: -- km/h"
+                    android:textSize="13sp"
+                    android:fontFamily="monospace"
+                    android:padding="8dp"
+                    android:background="#FFFFFF"
+                    android:layout_marginStart="4dp" />
+
+            </LinearLayout>
+
+            <!-- Biometric Status -->
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="BIOMETRIC STATUS"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:textColor="#757575"
+                android:letterSpacing="0.1"
+                android:layout_marginBottom="4dp" />
+
+            <TextView
+                android:id="@+id/biometricStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="🔒 Identity Required"
+                android:textSize="13sp"
+                android:fontFamily="monospace"
+                android:padding="10dp"
+                android:gravity="center"
+                android:background="#FFF3E0"
+                android:textColor="#E65100"
+                android:layout_marginBottom="10dp" />
+
+            <!-- Transport Debug -->
+            <LinearLayout
+                android:id="@+id/simSection"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:visibility="visible">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="TRANSPORT DEBUG"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:textColor="#757575"
+                    android:letterSpacing="0.1"
+                    android:layout_marginBottom="4dp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="4dp">
+
+                    <TextView
+                        android:id="@+id/debugDeviceMode"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="MODE: --"
+                        android:textSize="12sp"
+                        android:fontFamily="monospace"
+                        android:padding="7dp"
+                        android:background="#E8F5E9"
+                        android:layout_marginEnd="4dp" />
+
+                    <TextView
+                        android:id="@+id/debugSession"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="SESSION: --"
+                        android:textSize="12sp"
+                        android:fontFamily="monospace"
+                        android:padding="7dp"
+                        android:background="#E8F5E9"
+                        android:layout_marginStart="4dp" />
+
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="4dp">
+
+                    <TextView
+                        android:id="@+id/debugBiometric"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="BIO: --"
+                        android:textSize="12sp"
+                        android:fontFamily="monospace"
+                        android:padding="7dp"
+                        android:background="#E8F5E9"
+                        android:layout_marginEnd="4dp" />
+
+                    <TextView
+                        android:id="@+id/debugAdvisory"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="ADVISORY: --"
+                        android:textSize="12sp"
+                        android:fontFamily="monospace"
+                        android:padding="7dp"
+                        android:background="#E8F5E9"
+                        android:layout_marginStart="4dp" />
+
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/debugNearStation"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="AT STATION: --"
+                    android:textSize="12sp"
+                    android:fontFamily="monospace"
+                    android:padding="7dp"
+                    android:background="#E8F5E9" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+    </ScrollView>
+
+</LinearLayout>

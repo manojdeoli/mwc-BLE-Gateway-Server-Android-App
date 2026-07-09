@@ -113,10 +113,7 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // Hide the default ActionBar — the IP address banner serves as the app header
-        if (getSupportActionBar() != null) {
-            getSupportActionBar().hide();
-        }
+        if (getSupportActionBar() != null) getSupportActionBar().hide();
 
         startButton    = findViewById(R.id.startButton);
         stopButton     = findViewById(R.id.stopButton);
@@ -311,11 +308,11 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
                                            boolean bioFresh, boolean advisory,
                                            boolean nearStation) {
         runOnUiThread(() -> {
-            if (debugDeviceMode  != null) debugDeviceMode.setText( "[MODE]        " + (mode != null ? mode : "--"));
-            if (debugSession     != null) debugSession.setText(    "[SESSION]     " + (session     ? "ACTIVE"   : "IDLE"));
-            if (debugBiometric   != null) debugBiometric.setText(  "[BIOMETRIC]   " + (bioFresh    ? "FRESH"    : "STALE"));
-            if (debugAdvisory    != null) debugAdvisory.setText(   "[ADVISORY]    " + (advisory    ? "ACTIVE"   : "NONE"));
-            if (debugNearStation != null) debugNearStation.setText("[AT STATION]  " + (nearStation ? "YES"      : "NO"));
+            if (debugDeviceMode  != null) debugDeviceMode.setText( "MODE: "        + (mode != null ? mode : "--"));
+            if (debugSession     != null) debugSession.setText(    "SESSION: "     + (session     ? "ACTIVE" : "IDLE"));
+            if (debugBiometric   != null) debugBiometric.setText(  "BIO: "         + (bioFresh    ? "FRESH"  : "STALE"));
+            if (debugAdvisory    != null) debugAdvisory.setText(   "ADVISORY: "    + (advisory    ? "ACTIVE" : "NONE"));
+            if (debugNearStation != null) debugNearStation.setText("AT STATION: "  + (nearStation ? "YES"    : "NO"));
             if (biometricStatusText != null) {
                 if (bioFresh) {
                     biometricStatusText.setText("✅ Identity Verified — Biometric Fresh");
@@ -336,22 +333,22 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
 
     private void updateBeaconDisplay(String beaconName, int rssi) {
         runOnUiThread(() -> {
-            String display = String.format("%-14s %d dBm", beaconName + ":", rssi);
+            String display = String.format("%-10s %d dBm", beaconName.replace("Hotel", "") + ":", rssi);
             switch (beaconName) {
-                case "HotelGate":     beaconGate.setText(display);     break;
-                case "HotelKiosk":    beaconKiosk.setText(display);    break;
-                case "HotelElevator": beaconElevator.setText(display); break;
-                case "HotelRoom":     beaconRoom.setText(display);     break;
+                case "HotelGate":     beaconGate.setText("Gate: "     + rssi + " dBm"); break;
+                case "HotelKiosk":    beaconKiosk.setText("Kiosk: "    + rssi + " dBm"); break;
+                case "HotelElevator": beaconElevator.setText("Elevator: " + rssi + " dBm"); break;
+                case "HotelRoom":     beaconRoom.setText("Room: "     + rssi + " dBm"); break;
             }
         });
     }
 
     private void updateContextDisplay(String mode, int confidence, String motion, float speed) {
         runOnUiThread(() -> {
-            contextMode.setText(      String.format("%-12s %s",        "Mode:",       mode   != null ? mode   : "--"));
-            contextConfidence.setText(String.format("%-12s %d%%",      "Confidence:", confidence));
-            contextMotion.setText(    String.format("%-12s %s",        "Motion:",     motion != null ? motion : "--"));
-            contextSpeed.setText(     String.format("%-12s %.1f km/h", "Speed:",      speed));
+            contextMode.setText(      "Mode: "   + (mode   != null ? mode   : "--"));
+            contextConfidence.setText("Conf: "   + confidence + "%");
+            contextMotion.setText(    "Motion: " + (motion != null ? motion : "--"));
+            contextSpeed.setText(     "Speed: "  + String.format("%.1f", speed) + " km/h");
         });
     }
 
@@ -376,14 +373,14 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
 
     private void stopScanService() {
         stopService(new Intent(this, BLEScanService.class));
-        beaconGate.setText("HotelGate:     --");
-        beaconKiosk.setText("HotelKiosk:    --");
-        beaconElevator.setText("HotelElevator: --");
-        beaconRoom.setText("HotelRoom:     --");
-        contextMode.setText("Mode:       --");
-        contextConfidence.setText("Confidence: --");
-        contextMotion.setText("Motion:     --");
-        contextSpeed.setText("Speed:      -- km/h");
+        beaconGate.setText("Gate: --");
+        beaconKiosk.setText("Kiosk: --");
+        beaconElevator.setText("Elevator: --");
+        beaconRoom.setText("Room: --");
+        contextMode.setText("Mode: --");
+        contextConfidence.setText("Conf: --");
+        contextMotion.setText("Motion: --");
+        contextSpeed.setText("Speed: -- km/h");
         isServiceRunning = false;
         startButton.setEnabled(true);
         startButton.setAlpha(1.0f);
