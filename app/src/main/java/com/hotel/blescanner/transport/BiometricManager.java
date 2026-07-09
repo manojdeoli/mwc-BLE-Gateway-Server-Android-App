@@ -4,7 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.util.Log;
-import androidx.biometric.BiometricManager.Authenticators;
+
 
 /**
  * Manages biometric authentication state for Transport mode validation.
@@ -66,28 +66,27 @@ public class BiometricManager {
     }
 
     /**
-     * Reads the OS-level last biometric authentication time via AndroidX BiometricManager.
-     * getLastAuthenticationTime() is API 35+ but AndroidX handles the version check.
-     * BIOMETRIC_STRONG | DEVICE_CREDENTIAL covers fingerprint, face, and PIN/pattern unlock.
+     * Reads the OS-level last biometric authentication time.
+     * Uses android.hardware.biometrics.BiometricManager.getLastAuthenticationTime() — API 35+.
+     * Called via reflection to avoid compile-time dependency on the exact alpha version.
      * Returns 0 on older Android versions or if no OS auth has been recorded.
      */
     private long getOsLastAuthTimeMs() {
-        if (Build.VERSION.SDK_INT < 35) {
-            Log.d(TAG, "OS biometric auth time: API < 35, skipping");
-            return 0L;
-        }
+        if (Build.VERSION.SDK_INT < 35) return 0L;
         try {
-            androidx.biometric.BiometricManager bm =
-                androidx.biometric.BiometricManager.from(context);
-            // BIOMETRIC_STRONG covers fingerprint + face on supported devices
-            long lastAuth = bm.getLastAuthenticationTime(Authenticators.BIOMETRIC_STRONG);
-            if (lastAuth > 0) {
+            android.hardware.biometrics.BiometricManager bm =
+                context.getSystemService(android.hardware.biometrics.BiometricManager.class);
+            if (bm == null) return 0L;
+            // BIOMETRIC_STRONG = 15, DEVICE_CREDENTIAL = 32768 (framework constants)
+            java.lang.reflect.Method m = bm.getClass()
+                .getMethod("getLastAuthenticationTime", int.class);
+            long lastStrong = (long) m.invoke(bm, 15);    // BIOMETRIC_STRONG
+            if (lastStrong > 0) {
                 Log.d(TAG, "OS biometric last auth (STRONG): age="
-                    + (System.currentTimeMillis() - lastAuth) + "ms");
-                return lastAuth;
+                    + (System.currentTimeMillis() - lastStrong) + "ms");
+                return lastStrong;
             }
-            // Fallback: DEVICE_CREDENTIAL (PIN/pattern) — also counts as fresh
-            long lastCred = bm.getLastAuthenticationTime(Authenticators.DEVICE_CREDENTIAL);
+            long lastCred = (long) m.invoke(bm, 32768);   // DEVICE_CREDENTIAL
             if (lastCred > 0) {
                 Log.d(TAG, "OS biometric last auth (DEVICE_CREDENTIAL): age="
                     + (System.currentTimeMillis() - lastCred) + "ms");
