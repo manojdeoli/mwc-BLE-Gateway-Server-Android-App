@@ -375,7 +375,7 @@
         android:orientation="horizontal"
         android:background="#FFFFFF"
         android:paddingTop="10dp"
-        android:paddingBottom="16dp"
+        android:paddingBottom="36dp"
         android:paddingStart="12dp"
         android:paddingEnd="12dp"
         android:elevation="8dp">
