@@ -4,6 +4,7 @@ import android.content.Context;
 import android.content.SharedPreferences;
 import android.os.Build;
 import android.util.Log;
+import androidx.biometric.BiometricManager.Authenticators;
 
 /**
  * Manages biometric authentication state for Transport mode validation.
@@ -65,25 +66,35 @@ public class BiometricManager {
     }
 
     /**
-     * Reads the OS-level last biometric authentication time.
-     * Uses BiometricManager.getLastAuthenticationTime() available on API 35+.
+     * Reads the OS-level last biometric authentication time via AndroidX BiometricManager.
+     * getLastAuthenticationTime() is API 35+ but AndroidX handles the version check.
+     * BIOMETRIC_STRONG | DEVICE_CREDENTIAL covers fingerprint, face, and PIN/pattern unlock.
      * Returns 0 on older Android versions or if no OS auth has been recorded.
      */
     private long getOsLastAuthTimeMs() {
-        if (Build.VERSION.SDK_INT < 35) return 0L;
+        if (Build.VERSION.SDK_INT < 35) {
+            Log.d(TAG, "OS biometric auth time: API < 35, skipping");
+            return 0L;
+        }
         try {
-            android.hardware.biometrics.BiometricManager bm =
-                (android.hardware.biometrics.BiometricManager)
-                    context.getSystemService(Context.BIOMETRIC_SERVICE);
-            if (bm == null) return 0L;
+            androidx.biometric.BiometricManager bm =
+                androidx.biometric.BiometricManager.from(context);
             // BIOMETRIC_STRONG covers fingerprint + face on supported devices
-            long lastAuth = bm.getLastAuthenticationTime(
-                android.hardware.biometrics.BiometricManager.Authenticators.BIOMETRIC_STRONG);
+            long lastAuth = bm.getLastAuthenticationTime(Authenticators.BIOMETRIC_STRONG);
             if (lastAuth > 0) {
-                Log.d(TAG, "OS biometric last auth: " + lastAuth
-                    + " (age " + (System.currentTimeMillis() - lastAuth) + "ms)");
+                Log.d(TAG, "OS biometric last auth (STRONG): age="
+                    + (System.currentTimeMillis() - lastAuth) + "ms");
+                return lastAuth;
             }
-            return lastAuth > 0 ? lastAuth : 0L;
+            // Fallback: DEVICE_CREDENTIAL (PIN/pattern) — also counts as fresh
+            long lastCred = bm.getLastAuthenticationTime(Authenticators.DEVICE_CREDENTIAL);
+            if (lastCred > 0) {
+                Log.d(TAG, "OS biometric last auth (DEVICE_CREDENTIAL): age="
+                    + (System.currentTimeMillis() - lastCred) + "ms");
+                return lastCred;
+            }
+            Log.d(TAG, "OS biometric last auth: no recent auth recorded");
+            return 0L;
         } catch (Exception e) {
             Log.w(TAG, "Could not read OS biometric auth time: " + e.getMessage());
             return 0L;
