@@ -2,7 +2,6 @@ package com.hotel.blescanner.transport;
 
 import android.content.Context;
 import android.content.SharedPreferences;
-import android.os.Build;
 import android.util.Log;
 
 
@@ -66,38 +65,17 @@ public class BiometricManager {
     }
 
     /**
-     * Reads the OS-level last biometric authentication time.
-     * Uses android.hardware.biometrics.BiometricManager.getLastAuthenticationTime() — API 35+.
-     * Called via reflection to avoid compile-time dependency on the exact alpha version.
-     * Returns 0 on older Android versions or if no OS auth has been recorded.
+     * Records the time the user unlocked the device via ACTION_USER_PRESENT.
+     * Called by BLEScanService's unlock broadcast receiver.
+     * Works on all Android versions — no reflection, no hidden APIs.
      */
+    public void recordOsUnlockTime() {
+        prefs.edit().putLong("os_unlock_ms", System.currentTimeMillis()).apply();
+        Log.d(TAG, "OS unlock time recorded");
+    }
+
     private long getOsLastAuthTimeMs() {
-        if (Build.VERSION.SDK_INT < 35) return 0L;
-        try {
-            android.hardware.biometrics.BiometricManager bm =
-                context.getSystemService(android.hardware.biometrics.BiometricManager.class);
-            if (bm == null) return 0L;
-            // BIOMETRIC_STRONG = 15, DEVICE_CREDENTIAL = 32768 (framework constants)
-            java.lang.reflect.Method m = bm.getClass()
-                .getMethod("getLastAuthenticationTime", int.class);
-            long lastStrong = (long) m.invoke(bm, 15);    // BIOMETRIC_STRONG
-            if (lastStrong > 0) {
-                Log.d(TAG, "OS biometric last auth (STRONG): age="
-                    + (System.currentTimeMillis() - lastStrong) + "ms");
-                return lastStrong;
-            }
-            long lastCred = (long) m.invoke(bm, 32768);   // DEVICE_CREDENTIAL
-            if (lastCred > 0) {
-                Log.d(TAG, "OS biometric last auth (DEVICE_CREDENTIAL): age="
-                    + (System.currentTimeMillis() - lastCred) + "ms");
-                return lastCred;
-            }
-            Log.d(TAG, "OS biometric last auth: no recent auth recorded");
-            return 0L;
-        } catch (Exception e) {
-            Log.w(TAG, "Could not read OS biometric auth time: " + e.getMessage());
-            return 0L;
-        }
+        return prefs.getLong("os_unlock_ms", 0L);
     }
 
     /**

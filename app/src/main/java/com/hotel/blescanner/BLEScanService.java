@@ -132,6 +132,18 @@ public class BLEScanService extends Service {
     // Broadcast receivers
     // -------------------------------------------------------------------------
 
+    /** Records device unlock time in BiometricManager for OS-level freshness check */
+    private final BroadcastReceiver userPresentReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (biometricManager != null) {
+                biometricManager.recordOsUnlockTime();
+                Log.d(TAG, T_BIO + " Device unlocked — OS unlock time recorded");
+                broadcastTransportDebugState();
+            }
+        }
+    };
+
     /** Pre-journey biometric — now routes to validation success when in TRANSPORT mode */
     private final BroadcastReceiver biometricSuccessReceiver = new BroadcastReceiver() {
         @Override
@@ -227,6 +239,9 @@ public class BLEScanService extends Service {
         LocalBroadcastManager lbm = LocalBroadcastManager.getInstance(this);
         lbm.registerReceiver(biometricSuccessReceiver, new IntentFilter("BIOMETRIC_SUCCESS"));
         lbm.registerReceiver(nfcTagReadReceiver,       new IntentFilter("NFC_TAG_READ"));
+        // ACTION_USER_PRESENT fires when user unlocks the device (fingerprint/PIN/pattern).
+        // Must be registered dynamically — not supported in manifest.
+        registerReceiver(userPresentReceiver, new IntentFilter(Intent.ACTION_USER_PRESENT));
     }
 
     @Override
@@ -516,6 +531,7 @@ public class BLEScanService extends Service {
         LocalBroadcastManager lbm = LocalBroadcastManager.getInstance(this);
         lbm.unregisterReceiver(biometricSuccessReceiver);
         lbm.unregisterReceiver(nfcTagReadReceiver);
+        unregisterReceiver(userPresentReceiver);
         lastSeenBeacons.clear();
         lastRssiValues.clear();
     }
