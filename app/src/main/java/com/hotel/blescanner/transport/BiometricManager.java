@@ -58,7 +58,7 @@ public class BiometricManager {
      *   - OS-level BiometricManager (Android 15+: device unlock, other apps)
      * Returns 0 if no authentication has been recorded.
      */
-    private long getMostRecentAuthTimeMs() {
+    public long getMostRecentAuthTimeMs() {
         long appAuthMs = prefs.getLong(KEY_LAST_AUTH_MS, 0L);
         long osAuthMs  = getOsLastAuthTimeMs();
         return Math.max(appAuthMs, osAuthMs);

@@ -4,8 +4,12 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkCapabilities;
 import android.net.wifi.WifiInfo;
 import android.net.wifi.WifiManager;
+import android.os.Build;
 import android.util.Log;
 import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 import com.hotel.blescanner.config.TransportConfig;
@@ -218,14 +222,32 @@ public class NetworkProximityMonitor {
 
     private WifiInfo getCurrentWifiInfo() {
         try {
-            WifiManager wm = (WifiManager) context.getApplicationContext()
-                .getSystemService(Context.WIFI_SERVICE);
-            if (wm == null || !wm.isWifiEnabled()) return null;
-            WifiInfo info = wm.getConnectionInfo();
-            if (info == null || info.getSSID() == null) return null;
-            // "<unknown ssid>" means not connected
-            if ("<unknown ssid>".equalsIgnoreCase(info.getSSID())) return null;
-            return info;
+            // API 31+ (Android 12+): getConnectionInfo() is deprecated.
+            // API 35+ (Android 15+): getConnectionInfo() returns null.
+            // Use ConnectivityManager + NetworkCapabilities instead.
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                ConnectivityManager cm = (ConnectivityManager)
+                    context.getSystemService(Context.CONNECTIVITY_SERVICE);
+                if (cm == null) return null;
+                Network network = cm.getActiveNetwork();
+                if (network == null) return null;
+                NetworkCapabilities caps = cm.getNetworkCapabilities(network);
+                if (caps == null) return null;
+                if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) return null;
+                WifiInfo info = (WifiInfo) caps.getTransportInfo();
+                if (info == null || info.getSSID() == null) return null;
+                if ("<unknown ssid>".equalsIgnoreCase(info.getSSID())) return null;
+                return info;
+            } else {
+                // Legacy path for API 26–30
+                WifiManager wm = (WifiManager) context.getApplicationContext()
+                    .getSystemService(Context.WIFI_SERVICE);
+                if (wm == null || !wm.isWifiEnabled()) return null;
+                WifiInfo info = wm.getConnectionInfo();
+                if (info == null || info.getSSID() == null) return null;
+                if ("<unknown ssid>".equalsIgnoreCase(info.getSSID())) return null;
+                return info;
+            }
         } catch (Exception e) {
             Log.w(TAG, "Could not read WiFi info", e);
             return null;

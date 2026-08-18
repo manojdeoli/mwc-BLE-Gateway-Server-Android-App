@@ -27,6 +27,15 @@ import com.hotel.blescanner.context.ContextBuilder;
 import com.hotel.blescanner.context.ContextConfig;
 import com.hotel.blescanner.context.ContextEvent;
 import com.hotel.blescanner.context.ScoringConfig;
+import com.hotel.blescanner.insurance.InsuranceConfig;
+import com.hotel.blescanner.insurance.InsuranceLocationProvider;
+import com.hotel.blescanner.insurance.InsuranceSessionManager;
+import com.hotel.blescanner.insurance.InsuranceTelemetryEventFactory;
+import com.hotel.blescanner.insurance.InsuranceTelemetryPublisher;
+import com.hotel.blescanner.insurance.VehicleAssociationController;
+import com.hotel.blescanner.insurance.InsuranceBackendMonitor;
+import com.hotel.blescanner.mode.DeviceMode;
+import com.hotel.blescanner.mode.DeviceModePrefs;
 import com.hotel.blescanner.mode.DeviceModeController;
 import com.hotel.blescanner.motion.MotionAnalyzer;
 import com.hotel.blescanner.transport.BiometricCallback;
@@ -39,6 +48,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -93,6 +103,10 @@ public class BLEScanService extends Service {
 
     // Mode controller — default = HOTEL
     private final DeviceModeController modeController = new DeviceModeController();
+
+    // Insurance fields — null unless INSURANCE mode is active
+    private InsuranceConfig         insuranceConfig         = null;
+    private InsuranceSessionManager insuranceSessionManager = null;
 
     // Context layer — unchanged
     private MotionAnalyzer             motionAnalyzer;
@@ -215,6 +229,21 @@ public class BLEScanService extends Service {
                         validationController.onBarrierProximity(mappedName, rssi);
                     }
 
+                    if (modeController.isInsuranceMode() && insuranceSessionManager != null) {
+                        insuranceSessionManager.onBeaconDetected(deviceName, rssi);
+                        // Broadcast so UI can show vehicle beacon RSSI in Insurance mode
+                        InsuranceConfig cfg = insuranceConfig;
+                        if (cfg != null && (deviceName.equals(cfg.getRegisteredVehicleBeaconId())
+                                || deviceName.equals(cfg.getPhysicalBeaconId()))) {
+                            Intent vi = new Intent("INSURANCE_BEACON_UPDATE");
+                            vi.putExtra("beaconName", deviceName);
+                            vi.putExtra("rssi", rssi);
+                            vi.putExtra("sessionState",
+                                insuranceSessionManager.getSessionState().name());
+                            LocalBroadcastManager.getInstance(BLEScanService.this).sendBroadcast(vi);
+                        }
+                    }
+
                     broadcastTransportDebugState();
                 }
             } catch (SecurityException e) {
@@ -241,12 +270,34 @@ public class BLEScanService extends Service {
         lbm.registerReceiver(nfcTagReadReceiver,       new IntentFilter("NFC_TAG_READ"));
         // ACTION_USER_PRESENT fires when user unlocks the device (fingerprint/PIN/pattern).
         // Must be registered dynamically — not supported in manifest.
-        registerReceiver(userPresentReceiver, new IntentFilter(Intent.ACTION_USER_PRESENT));
+        // Android 14+ requires RECEIVER_EXPORTED for system broadcasts.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            registerReceiver(userPresentReceiver,
+                new IntentFilter(Intent.ACTION_USER_PRESENT), RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(userPresentReceiver,
+                new IntentFilter(Intent.ACTION_USER_PRESENT));
+        }
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        startForeground(NOTIFICATION_ID, createNotification("Scanning for beacons..."));
+        // On Android 14+ (API 34+), startForeground() with a location type requires
+        // ACCESS_FINE_LOCATION to already be granted — otherwise the system throws
+        // a SecurityException and crashes the service immediately.
+        // Use location type only when the permission is actually granted.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            boolean locationGranted = androidx.core.content.ContextCompat.checkSelfPermission(
+                this, android.Manifest.permission.ACCESS_FINE_LOCATION)
+                == android.content.pm.PackageManager.PERMISSION_GRANTED;
+            int serviceType = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE;
+            if (locationGranted) {
+                serviceType |= android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION;
+            }
+            startForeground(NOTIFICATION_ID, createNotification("Scanning for beacons..."), serviceType);
+        } else {
+            startForeground(NOTIFICATION_ID, createNotification("Scanning for beacons..."));
+        }
         Log.d(TAG, T_MODE + " Service starting in mode: " + modeController.getMode());
         startScanning();
         return START_STICKY;
@@ -265,7 +316,7 @@ public class BLEScanService extends Service {
         }
 
         try {
-            gatewayServer = new GatewayServer(DEMO_SUBSCRIPTION_ID);
+            gatewayServer = new GatewayServer(DEMO_SUBSCRIPTION_ID, this);
             gatewayServer.start();
 
             // ----------------------------------------------------------------
@@ -352,7 +403,22 @@ public class BLEScanService extends Service {
 
                 rfActivation = new RFActivationController(bleScanner, filters, placeholder, scanCallback);
                 validationController.setRfActivation(rfActivation);
-                applyCurrentMode();
+
+                // Auto-activate based on last mode saved by the connecting app
+                DeviceModePrefs modePrefs = new DeviceModePrefs(this);
+                if (modePrefs.getLastMode() == DeviceMode.INSURANCE) {
+                    InsuranceConfig storedCfg = new InsuranceConfig(this);
+                    if (storedCfg.isEnabled() && storedCfg.isValid()) {
+                        Log.d(TAG, "[INS] Last app was Insurance — auto-activating INSURANCE mode");
+                        activateInsuranceMode(storedCfg);
+                    } else {
+                        Log.w(TAG, "[INS] Last mode was INSURANCE but config invalid — defaulting to HOTEL");
+                        applyCurrentMode();
+                    }
+                } else {
+                    Log.d(TAG, T_MODE + " Last app was Hotel — starting in HOTEL mode");
+                    applyCurrentMode();
+                }
 
             } catch (SecurityException e) {
                 Log.e(TAG, "Permission denied", e); stopSelf();
@@ -512,6 +578,15 @@ public class BLEScanService extends Service {
                 rfActivation.ensureScanStopped();
                 if (networkProximityMonitor != null) networkProximityMonitor.stop();
             }
+        } else if (modeController.isInsuranceMode()) {
+            if (networkProximityMonitor != null) networkProximityMonitor.stop();
+            // Use broad scan (no filters) in INSURANCE mode so the vehicle beacon
+            // is always received regardless of how it advertises its name.
+            // Software filtering happens in the scan callback via deviceName comparison.
+            rfActivation.setScanMode(insuranceConfig != null
+                ? insuranceConfig.getVerificationScanMode()
+                : ScanSettings.SCAN_MODE_BALANCED);
+            rfActivation.startBroadScan();
         }
         broadcastTransportDebugState();
     }
@@ -522,6 +597,7 @@ public class BLEScanService extends Service {
         if (rfActivation != null)           rfActivation.ensureScanStopped();
         if (validationController != null)   validationController.shutdown();
         if (networkProximityMonitor != null) networkProximityMonitor.stop();
+        if (insuranceSessionManager != null) insuranceSessionManager.stop();
         activeValidationController = null;
         activeBiometricManager     = null;
         activeInstance             = null;
@@ -562,8 +638,140 @@ public class BLEScanService extends Service {
     }
 
     // -------------------------------------------------------------------------
-    // Accessors
+    // Insurance mode wiring
     // -------------------------------------------------------------------------
+
+    /**
+     * Called by GatewayServer when an inbound WebSocket message with type
+     * "insuranceConfig" is received. Parses the config and activates INSURANCE mode.
+     */
+    public void onInsuranceConfigReceived(String json) {
+        InsuranceConfig cfg = new InsuranceConfig(this);
+        cfg.loadFromJson(json);
+        if (!cfg.isValid()) {
+            Log.w(TAG, "[INS] Received invalid insurance config — ignoring");
+            return;
+        }
+        // Skip re-activation if already in INSURANCE mode with the same beacon ID.
+        // This prevents flickering caused by the web client re-sending insuranceConfig
+        // on every WebSocket reconnect.
+        if (modeController.isInsuranceMode() && insuranceConfig != null
+                && cfg.getRegisteredVehicleBeaconId().equals(
+                        insuranceConfig.getRegisteredVehicleBeaconId())) {
+            Log.d(TAG, "[INS] insuranceConfig received — already active with same beacon, skipping restart");
+            broadcastTransportDebugState(); // ensure UI stays in sync after WS reconnect
+            return;
+        }
+        cfg.setEnabled(true);
+        activateInsuranceMode(cfg);
+    }
+
+    private void activateInsuranceMode(InsuranceConfig cfg) {
+        if (modeController.isInsuranceMode() && insuranceSessionManager != null) {
+            Log.d(TAG, "[INS] Already in INSURANCE mode — restarting with new config");
+            insuranceSessionManager.stop();
+        }
+        // Persist INSURANCE mode so service restarts auto-activate without needing WS message
+        new DeviceModePrefs(this).saveMode(DeviceMode.INSURANCE);
+        insuranceConfig = cfg;
+
+        InsuranceLocationProvider locationProvider = new InsuranceLocationProvider(this, cfg);
+        VehicleAssociationController vehicleController = new VehicleAssociationController(cfg);
+        InsuranceTelemetryPublisher publisher = new InsuranceTelemetryPublisher(cfg, gatewayServer);
+        InsuranceTelemetryEventFactory factory = new InsuranceTelemetryEventFactory(cfg, biometricManager);
+        insuranceSessionManager = new InsuranceSessionManager(
+            cfg, biometricManager, vehicleController, factory, publisher, locationProvider, this);
+
+        insuranceSessionManager.setStatusListener(
+            (state, sid, beaconDetected, freshness, pubState) ->
+                gatewayServer.broadcastInsuranceStatus(
+                    sid, state.name(), beaconDetected, freshness.name(), pubState.name()));
+
+        gatewayServer.setInsuranceHealthProvider(new GatewayServer.InsuranceHealthProvider() {
+            @Override
+            public java.util.Map<String, Object> getInsuranceHealthBlock() {
+                java.util.Map<String, Object> block = new java.util.HashMap<>();
+                // GAP #10 — enriched insurance health block
+                block.put("enabled",        true);
+                block.put("configured",     cfg.isValid());
+                block.put("sessionState",   insuranceSessionManager.getSessionState().name());
+                block.put("sessionId",      insuranceSessionManager.getSessionId() != null
+                    ? InsuranceTelemetryEventFactory.maskId(insuranceSessionManager.getSessionId())
+                    : null);
+                block.put("sessionActive",  insuranceSessionManager.isSessionActive());
+                block.put("authFreshness",  insuranceSessionManager.getFreshnessState().name());
+
+                // Publisher / queue
+                InsuranceTelemetryPublisher pub = insuranceSessionManager.getPublisher();
+                block.put("publisherState",        pub.getPublisherState().name());
+                block.put("lastPublishStatus",     pub.getLastPublishStatus());
+                block.put("lastSuccessfulPublish",  pub.getLastSuccessMs() > 0
+                    ? InsuranceTelemetryEventFactory.toIso8601(pub.getLastSuccessMs()) : null);
+                block.put("pendingEvents",         pub.getPendingCount());
+
+                // Backend reachability (GAP #3)
+                block.putAll(pub.getBackendMonitor().toHealthBlock());
+
+                // GPS / speed (GAP #7, #8)
+                InsuranceLocationProvider loc = insuranceSessionManager.getLocationProvider();
+                block.put("gpsAvailable",          loc.isLocationAvailable());
+                block.put("gpsPermissionGranted",  loc.isGpsPermissionGranted());
+                block.put("speedAvailable",        loc.isSpeedAvailable());
+                block.put("speedSource",           loc.getSpeedSource());
+
+                // Beacon / association (GAP #5)
+                VehicleAssociationController vc = insuranceSessionManager.getVehicleController();
+                block.put("beaconDetected",         vc.isBeaconDetected());
+                block.put("associationState",       vc.getState().name());
+                block.put("advertisementCount",     vc.getAdvertisementCount());
+                block.put("averageRssi",            vc.getAverageRssi());
+                block.put("associationDurationSeconds", vc.getAssociationDurationMs() / 1000L);
+
+                // Scan profile (GAP #9)
+                block.put("scanProfile",           vc.getCurrentScanProfile());
+                block.put("scanTransitionReason",  vc.getScanTransitionReason());
+
+                // Event history (GAP #11)
+                block.put("recentEvents", insuranceSessionManager.getEventHistory());
+
+                return block;
+            }
+            @Override
+            public String getDeviceModeName() { return DeviceMode.INSURANCE.name(); }
+        });
+
+        // GAP #1 — mode set BEFORE start(); start() enters WAITING_FOR_VEHICLE, not a session
+        modeController.setDeviceMode(DeviceMode.INSURANCE, "insuranceConfig received");
+        insuranceSessionManager.start();
+        applyCurrentMode();
+        Log.d(TAG, "[INS] INSURANCE mode activated — waiting for vehicle");
+    }
+
+    private void deactivateInsuranceMode() {
+        if (insuranceSessionManager != null) {
+            insuranceSessionManager.stop();
+            insuranceSessionManager = null;
+        }
+        insuranceConfig = null;
+        gatewayServer.setInsuranceHealthProvider(null);
+        modeController.setDeviceMode(DeviceMode.HOTEL, "insurance deactivated");
+        applyCurrentMode();
+        Log.d(TAG, "[INS] INSURANCE mode deactivated — reverted to HOTEL");
+    }
+
+    public void onResyncRequested() {
+        if (insuranceSessionManager != null) {
+            insuranceSessionManager.publishResync();
+        } else {
+            Log.d(TAG, "[INS] Resync requested but no active session");
+        }
+    }
+
+    public void resetToHotelMode() {
+        new DeviceModePrefs(this).saveMode(DeviceMode.HOTEL);
+        deactivateInsuranceMode();
+        Log.d(TAG, "[INS] Manual reset to HOTEL mode");
+    }
 
     public DeviceModeController getModeController()         { return modeController; }
     public RFActivationController getRfActivation()         { return rfActivation; }
@@ -633,7 +841,7 @@ public class BLEScanService extends Service {
 
     private Notification createNotification(String text) {
         return new NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Hotel BLE Scanner")
+            .setContentTitle("BLE Scanner")
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentIntent(PendingIntent.getActivity(

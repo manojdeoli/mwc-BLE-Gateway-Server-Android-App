@@ -331,6 +331,10 @@ public class BeaconConfigManager {
         entries.add(new BeaconEntry(BeaconEntry.MatchType.EXACT, "BCPro_212364",
             "HotelGate",     "Hotel Entry Gate", true));
 
+        // Insurance demo vehicle beacon — allowed in INSURANCE mode
+        entries.add(new BeaconEntry(BeaconEntry.MatchType.EXACT, "DEMO-CAR-BEACON-001",
+            "VehicleBeacon", "Vehicle", false));
+
         BeaconConfig config = new BeaconConfig();
         config.version = "default";
         config.beacons = entries;

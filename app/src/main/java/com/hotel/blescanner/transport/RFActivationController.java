@@ -120,6 +120,15 @@ public class RFActivationController {
         startScanInternal();
     }
 
+    /** Starts BLE scanning with NO filters (broad scan) — receives all nearby devices. */
+    public void startBroadScan() {
+        if (scanRunning) stopScanInternal();
+        List<ScanFilter> saved = filters;
+        filters = null; // temporarily clear so startScanInternal passes null to BLE stack
+        startScanInternal();
+        filters = saved; // restore so filter-based modes still work after a restart
+    }
+
     /** Stops BLE scanning if currently running. Safe to call multiple times. */
     public void ensureScanStopped() {
         if (!scanRunning) return;

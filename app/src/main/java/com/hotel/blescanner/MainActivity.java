@@ -35,11 +35,21 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
 
     private Button   startButton;
     private Button   stopButton;
+    private Button   resetButton;
     private TextView ipAddressText;
     private TextView beaconGate;
     private TextView beaconKiosk;
     private TextView beaconElevator;
     private TextView beaconRoom;
+
+    private TextView activeModeText;
+
+    // Insurance beacon UI
+    private android.view.View insuranceBeaconCard;
+    private TextView insuranceBeaconName;
+    private TextView insuranceBeaconRssi;
+    private android.widget.ProgressBar insuranceSignalBar;
+    private TextView insuranceAssocState;
 
     // Context display UI
     private TextView contextMode;
@@ -96,6 +106,16 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         }
     };
 
+    private final BroadcastReceiver insuranceBeaconReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            String name  = intent.getStringExtra("beaconName");
+            int    rssi  = intent.getIntExtra("rssi", 0);
+            String state = intent.getStringExtra("sessionState");
+            updateInsuranceBeaconDisplay(name, rssi, state);
+        }
+    };
+
     private final BroadcastReceiver nfcEnableReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
@@ -117,11 +137,18 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
 
         startButton    = findViewById(R.id.startButton);
         stopButton     = findViewById(R.id.stopButton);
+        resetButton    = findViewById(R.id.resetButton);
         ipAddressText  = findViewById(R.id.ipAddressText);
         beaconGate     = findViewById(R.id.beaconGate);
         beaconKiosk    = findViewById(R.id.beaconKiosk);
         beaconElevator = findViewById(R.id.beaconElevator);
         beaconRoom     = findViewById(R.id.beaconRoom);
+        activeModeText  = findViewById(R.id.activeModeText);
+        insuranceBeaconCard  = findViewById(R.id.insuranceBeaconCard);
+        insuranceBeaconName  = findViewById(R.id.insuranceBeaconName);
+        insuranceBeaconRssi  = findViewById(R.id.insuranceBeaconRssi);
+        insuranceSignalBar   = findViewById(R.id.insuranceSignalBar);
+        insuranceAssocState  = findViewById(R.id.insuranceAssocState);
         contextMode       = findViewById(R.id.contextMode);
         contextConfidence = findViewById(R.id.contextConfidence);
         contextMotion     = findViewById(R.id.contextMotion);
@@ -139,6 +166,7 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         displayIPAddress();
         startButton.setOnClickListener(v -> startScanService());
         stopButton.setOnClickListener(v -> stopScanService());
+        resetButton.setOnClickListener(v -> resetToHotelMode());
 
         // Transport Debug panel is always visible — shows MODE/SESSION/BIOMETRIC state.
         // Simulation toggles have been removed; simulation is controlled via advisory.
@@ -164,10 +192,11 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     protected void onResume() {
         super.onResume();
         LocalBroadcastManager lbm = LocalBroadcastManager.getInstance(this);
-        lbm.registerReceiver(beaconReceiver,         new IntentFilter("BEACON_UPDATE"));
-        lbm.registerReceiver(contextReceiver,        new IntentFilter("CONTEXT_UPDATE"));
-        lbm.registerReceiver(transportDebugReceiver, new IntentFilter("TRANSPORT_DEBUG_UPDATE"));
-        lbm.registerReceiver(nfcEnableReceiver,      new IntentFilter("NFC_ENABLE"));
+        lbm.registerReceiver(beaconReceiver,           new IntentFilter("BEACON_UPDATE"));
+        lbm.registerReceiver(contextReceiver,          new IntentFilter("CONTEXT_UPDATE"));
+        lbm.registerReceiver(transportDebugReceiver,   new IntentFilter("TRANSPORT_DEBUG_UPDATE"));
+        lbm.registerReceiver(nfcEnableReceiver,        new IntentFilter("NFC_ENABLE"));
+        lbm.registerReceiver(insuranceBeaconReceiver,  new IntentFilter("INSURANCE_BEACON_UPDATE"));
         registerBiometricCallback();
 
         // Handle biometric request from full-screen notification
@@ -190,6 +219,7 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         lbm.unregisterReceiver(contextReceiver);
         lbm.unregisterReceiver(transportDebugReceiver);
         lbm.unregisterReceiver(nfcEnableReceiver);
+        lbm.unregisterReceiver(insuranceBeaconReceiver);
         if (rfidNfcReader != null) rfidNfcReader.disableForegroundDispatch();
         // Keep biometric callback registered when going to background —
         // ValidationController will use postBiometricNotification() if callback
@@ -308,6 +338,14 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
                                            boolean bioFresh, boolean advisory,
                                            boolean nearStation) {
         runOnUiThread(() -> {
+            if (activeModeText != null)
+                activeModeText.setText("Mode: " + (mode != null ? mode : "HOTEL"));
+            // Show/hide insurance beacon card based on mode
+            if (insuranceBeaconCard != null) {
+                boolean isInsurance = "INSURANCE".equals(mode);
+                insuranceBeaconCard.setVisibility(isInsurance ? View.VISIBLE : View.GONE);
+                if (!isInsurance) resetInsuranceBeaconDisplay();
+            }
             if (debugDeviceMode  != null) debugDeviceMode.setText( "MODE: "        + (mode != null ? mode : "--"));
             if (debugSession     != null) debugSession.setText(    "SESSION: "     + (session     ? "ACTIVE" : "IDLE"));
             if (debugBiometric   != null) debugBiometric.setText(  "BIO: "         + (bioFresh    ? "FRESH"  : "STALE"));
@@ -343,6 +381,48 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         });
     }
 
+    private void updateInsuranceBeaconDisplay(String name, int rssi, String state) {
+        runOnUiThread(() -> {
+            if (insuranceBeaconName != null)
+                insuranceBeaconName.setText("Beacon: " + (name != null ? name : "--"));
+            if (insuranceBeaconRssi != null)
+                insuranceBeaconRssi.setText("RSSI: " + rssi + " dBm");
+            // Map RSSI (-40 strong .. -100 weak) to 0-100 progress
+            if (insuranceSignalBar != null) {
+                int progress = Math.max(0, Math.min(100, (rssi + 100) * 100 / 60));
+                insuranceSignalBar.setProgress(progress);
+                // Colour: green > 60%, amber 30-60%, red < 30%
+                int tint = progress > 60 ? 0xFF1B5E20 : (progress > 30 ? 0xFFE65100 : 0xFFB71C1C);
+                insuranceSignalBar.setProgressTintList(
+                    android.content.res.ColorStateList.valueOf(tint));
+            }
+            if (insuranceAssocState != null) {
+                String label = state != null ? state.replace('_', ' ') : "WAITING FOR VEHICLE";
+                insuranceAssocState.setText("State: " + label);
+                // Colour the state chip
+                int bg, fg;
+                if (state != null && state.contains("ASSOCIATED")) {
+                    bg = 0xFFE8F5E9; fg = 0xFF1B5E20; // green
+                } else if (state != null && state.contains("CANDIDATE")) {
+                    bg = 0xFFFFF8E1; fg = 0xFFE65100; // amber
+                } else if (state != null && state.contains("DEGRADED")) {
+                    bg = 0xFFFFEBEE; fg = 0xFFB71C1C; // red
+                } else {
+                    bg = 0xFFE3F2FD; fg = 0xFF0D47A1; // blue (waiting)
+                }
+                insuranceAssocState.setBackgroundColor(bg);
+                insuranceAssocState.setTextColor(fg);
+            }
+        });
+    }
+
+    private void resetInsuranceBeaconDisplay() {
+        if (insuranceBeaconName  != null) insuranceBeaconName.setText("Beacon: --");
+        if (insuranceBeaconRssi  != null) insuranceBeaconRssi.setText("RSSI: --");
+        if (insuranceSignalBar   != null) insuranceSignalBar.setProgress(0);
+        if (insuranceAssocState  != null) insuranceAssocState.setText("State: WAITING FOR VEHICLE");
+    }
+
     private void updateContextDisplay(String mode, int confidence, String motion, float speed) {
         runOnUiThread(() -> {
             contextMode.setText(      "Mode: "   + (mode   != null ? mode   : "--"));
@@ -355,6 +435,24 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     // -------------------------------------------------------------------------
     // Service control
     // -------------------------------------------------------------------------
+
+    private void resetToHotelMode() {
+        BLEScanService svc = BLEScanService.getActiveInstance();
+        if (svc != null) {
+            svc.resetToHotelMode();
+        } else {
+            new com.hotel.blescanner.mode.DeviceModePrefs(this)
+                .saveMode(com.hotel.blescanner.mode.DeviceMode.HOTEL);
+        }
+        // Update UI immediately — don't wait for broadcast
+        if (activeModeText    != null) activeModeText.setText("Mode: HOTEL");
+        if (debugDeviceMode   != null) debugDeviceMode.setText("MODE: HOTEL");
+        if (debugSession      != null) debugSession.setText("SESSION: IDLE");
+        if (debugAdvisory     != null) debugAdvisory.setText("ADVISORY: NONE");
+        if (insuranceBeaconCard != null) insuranceBeaconCard.setVisibility(View.GONE);
+        resetInsuranceBeaconDisplay();
+        Toast.makeText(this, "Reset to HOTEL mode", Toast.LENGTH_SHORT).show();
+    }
 
     private void startScanService() {
         try {
@@ -377,6 +475,8 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         beaconKiosk.setText("Kiosk: --");
         beaconElevator.setText("Elevator: --");
         beaconRoom.setText("Room: --");
+        resetInsuranceBeaconDisplay();
+        if (insuranceBeaconCard != null) insuranceBeaconCard.setVisibility(View.GONE);
         contextMode.setText("Mode: --");
         contextConfidence.setText("Conf: --");
         contextMotion.setText("Motion: --");

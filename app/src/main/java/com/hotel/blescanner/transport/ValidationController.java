@@ -142,6 +142,13 @@ public class ValidationController {
     // -------------------------------------------------------------------------
 
     public synchronized void applyAdvisory(BackendAdvisory advisory) {
+        // INSURANCE mode isolation: a TRANSPORT advisory must not overwrite INSURANCE mode.
+        // If the device is in INSURANCE mode, log and ignore the advisory.
+        if (modeController.isInsuranceMode()) {
+            Log.d(TAG, T_ADV + " Advisory ignored — device is in INSURANCE mode");
+            return;
+        }
+
         Log.d(TAG, T_ADV + " Advisory received: stage=" + advisory.stage
             + " rfDetection=" + advisory.rfDetectionRequired
             + " validation=" + advisory.validationRequired

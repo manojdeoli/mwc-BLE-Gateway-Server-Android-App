@@ -7,7 +7,8 @@ import com.hotel.blescanner.config.BeaconConfigManager;
 import com.hotel.blescanner.context.ContextEvent;
 import com.hotel.blescanner.transport.BackendAdvisory;
 import com.hotel.blescanner.transport.ValidationController;
-import fi.iki.elonen.NanoHTTPD;
+import com.hotel.blescanner.mode.DeviceModePrefs;
+import com.hotel.blescanner.mode.DeviceMode;
 import fi.iki.elonen.NanoWSD;
 import java.io.IOException;
 import java.util.HashMap;
@@ -28,6 +29,7 @@ public class GatewayServer extends NanoWSD {
     private final Map<String, BLEData>   bleDataStore = new ConcurrentHashMap<>();
     private final Gson   gson   = new Gson();
     private final String userId;
+    private final DeviceModePrefs deviceModePrefs;
 
     /**
      * Periodic ping scheduler — sends a WebSocket ping to every connected client
@@ -49,9 +51,10 @@ public class GatewayServer extends NanoWSD {
      */
     private volatile BeaconConfigManager beaconConfigManager;
 
-    public GatewayServer(String userId) {
+    public GatewayServer(String userId, android.content.Context context) {
         super(PORT);
         this.userId = userId;
+        this.deviceModePrefs = new DeviceModePrefs(context);
     }
 
     @Override
@@ -115,6 +118,23 @@ public class GatewayServer extends NanoWSD {
     // HTTP — unchanged
     // -------------------------------------------------------------------------
 
+    // -------------------------------------------------------------------------
+    // Insurance health / diagnostic support — additive, injected by BLEScanService
+    // -------------------------------------------------------------------------
+
+    public interface InsuranceHealthProvider {
+        /** Returns an additive insurance health block for the /health endpoint. */
+        Map<String, Object> getInsuranceHealthBlock();
+        /** Returns the current device mode name. */
+        String getDeviceModeName();
+    }
+
+    private volatile InsuranceHealthProvider insuranceHealthProvider;
+
+    public void setInsuranceHealthProvider(InsuranceHealthProvider provider) {
+        this.insuranceHealthProvider = provider;
+    }
+
     @Override
     public Response serve(IHTTPSession session) {
         String uri = session.getUri();
@@ -123,6 +143,13 @@ public class GatewayServer extends NanoWSD {
             health.put("status",     "ok");
             health.put("webClients", webClients.size());
             health.put("timestamp",  System.currentTimeMillis());
+            // Additive: device mode and insurance block (null-safe)
+            InsuranceHealthProvider ihp = insuranceHealthProvider;
+            if (ihp != null) {
+                health.put("deviceMode", ihp.getDeviceModeName());
+                Map<String, Object> insBlock = ihp.getInsuranceHealthBlock();
+                if (insBlock != null) health.put("insurance", insBlock);
+            }
             Response response = newFixedLengthResponse(
                 Response.Status.OK, "application/json", gson.toJson(health));
             response.addHeader("Access-Control-Allow-Origin",  "*");
@@ -217,6 +244,40 @@ public class GatewayServer extends NanoWSD {
         }).start();
     }
 
+    /** Broadcasts a full insurance telemetry event to all WebSocket clients.
+     *  The PC backend's WebSocket client receives this and populates liveTrips.
+     *  This replaces the HTTP POST approach — no firewall issues, aligns with Hotel pattern. */
+    public void broadcastInsuranceTelemetry(com.hotel.blescanner.insurance.InsuranceTelemetryEvent event) {
+        new Thread(() -> {
+            try {
+                com.google.gson.JsonObject wrapper = new com.google.gson.JsonObject();
+                wrapper.addProperty("type", "insuranceTelemetry");
+                wrapper.add("payload", gson.toJsonTree(event));
+                broadcastToAllClients(wrapper.toString());
+                Log.d(TAG, "[INSURANCE] Telemetry broadcast over WS: " + event.eventType);
+            } catch (Exception e) {
+                Log.e(TAG, "[INSURANCE] Error broadcasting telemetry", e);
+            }
+        }).start();
+    }
+
+    /** Broadcasts an insurance diagnostic status event to local WebSocket clients only.
+     *  Used for development visibility. React Insurance dashboard must NOT depend on this.
+     *  Does not expose sensitive data (no phone number, no precise location, no policy details). */
+    public void broadcastInsuranceStatus(String sessionId, String sessionState,
+                                         boolean beaconDetected, String authFreshness,
+                                         String publisherState) {
+        new Thread(() -> {
+            try {
+                broadcastToAllClients(gson.toJson(
+                    new InsuranceStatusEvent(sessionId, sessionState,
+                                             beaconDetected, authFreshness, publisherState)));
+            } catch (Exception e) {
+                Log.e(TAG, "[INSURANCE] Error broadcasting insurance status", e);
+            }
+        }).start();
+    }
+
     /** Broadcasts a biometric validation event — same schema as NFC, method=BIOMETRIC. */
     public void broadcastBiometricValidationEvent(String journeyId, String status) {
         new Thread(() -> {
@@ -258,7 +319,10 @@ public class GatewayServer extends NanoWSD {
         protected void onClose(WebSocketFrame.CloseCode code, String reason, boolean initiatedByRemote) {
             Log.d(TAG, "WebSocket closed: " + clientId);
             webClients.remove(clientId);
-            if (webClients.isEmpty()) {
+            // Only notify ValidationController if NOT in INSURANCE mode.
+            // INSURANCE mode is sticky — it must not reset on every WS reconnect.
+            if (webClients.isEmpty()
+                    && deviceModePrefs.getLastMode() != DeviceMode.INSURANCE) {
                 ValidationController vc = validationController;
                 if (vc != null) vc.onWebSocketDisconnected();
             }
@@ -269,9 +333,10 @@ public class GatewayServer extends NanoWSD {
             String msg = message.getTextPayload();
             Log.d(TAG, "Received: " + msg);
 
-            // Existing subscribe handling — unchanged
+            // Existing subscribe handling — Hotel app connects
             if (msg.contains("subscribe")) {
-                Log.d(TAG, "Client subscribed: " + clientId);
+                Log.d(TAG, "Client subscribed: " + clientId + " — saving HOTEL as default mode");
+                deviceModePrefs.saveMode(DeviceMode.HOTEL);
             }
 
             // SERVER_URL message — store in TransportConfig for beacon config fetch
@@ -291,20 +356,51 @@ public class GatewayServer extends NanoWSD {
                 }
             }
 
+            // Backend requesting a resync — publish current state immediately
+            if (msg.contains("\"requestResync\"")) {
+                Log.d(TAG, "[INSURANCE] requestResync received — triggering resync");
+                BLEScanService svc = BLEScanService.getActiveInstance();
+                if (svc != null) svc.onResyncRequested();
+                return;
+            }
+
+            // Insurance config update — detected by type=insuranceConfig
+            // Additive: does not affect HOTEL or TRANSPORT config paths.
+            if (msg.contains("\"insuranceConfig\"") || msg.contains("\"type\":\"insuranceConfig\"")) {
+                Log.d(TAG, "[INSURANCE] Insurance config message received — saving INSURANCE as default mode");
+                // Log the backendBaseUrl received so we can confirm the PC IP reached Android
+                try {
+                    com.google.gson.JsonObject cfgObj = gson.fromJson(msg, com.google.gson.JsonObject.class);
+                    String receivedBackendUrl = cfgObj.has("backendBaseUrl") ? cfgObj.get("backendBaseUrl").getAsString() : "MISSING";
+                    String receivedPhone      = cfgObj.has("phoneNumber")    ? cfgObj.get("phoneNumber").getAsString()    : "MISSING";
+                    Log.d(TAG, "[INSURANCE] backendBaseUrl received: " + receivedBackendUrl);
+                    Log.d(TAG, "[INSURANCE] phoneNumber received: " + receivedPhone);
+                } catch (Exception e) {
+                    Log.w(TAG, "[INSURANCE] Could not parse insuranceConfig fields: " + e.getMessage());
+                }
+                deviceModePrefs.saveMode(DeviceMode.INSURANCE);
+                BLEScanService svc = BLEScanService.getActiveInstance();
+                if (svc != null) {
+                    svc.onInsuranceConfigReceived(msg);
+                } else {
+                    Log.w(TAG, "[INSURANCE] BLEScanService not available — insurance config ignored");
+                }
+                return;
+            }
+
             // Beacon config update from backend (Phase 8)
             // Detected by presence of "beacons" array alongside optional "version" field.
             // Distinct from advisory messages which always contain "riskLevel".
             if (msg.contains("\"beacons\"")) {
-                Log.d(TAG, T_CONFIG + " Beacon config message received");
-                // Route to BLEScanService via the active instance
-                // BLEScanService holds beaconConfigManager and owns the scan restart
+                Log.d(TAG, T_CONFIG + " Beacon config message received — saving HOTEL as default mode");
+                deviceModePrefs.saveMode(DeviceMode.HOTEL);
                 BLEScanService svc = BLEScanService.getActiveInstance();
                 if (svc != null) {
                     svc.onBeaconConfigReceived(msg);
                 } else {
                     Log.w(TAG, T_CONFIG + " BLEScanService not available — config update ignored");
                 }
-                return;  // not an advisory — skip advisory parsing below
+                return;
             }
 
             // Advisory parsing — strict Gson, no fragile contains() check
@@ -407,6 +503,29 @@ public class GatewayServer extends NanoWSD {
         final long   timestamp = System.currentTimeMillis();
         BiometricValidationEvent(String journeyId, String status) {
             this.journeyId = journeyId; this.status = status;
+        }
+    }
+
+    /** Local diagnostic event — for development visibility only.
+     *  React Insurance dashboard must NOT depend on this event.
+     *  No sensitive data: no phone number, no precise location, no policy details. */
+    private static class InsuranceStatusEvent {
+        final String  eventType          = "insuranceStatus";
+        final String  mode               = "INSURANCE";
+        final String  sessionId;
+        final String  sessionState;
+        final boolean vehicleBeaconDetected;
+        final String  authFreshness;
+        final String  publisherState;
+        final long    timestamp          = System.currentTimeMillis();
+        InsuranceStatusEvent(String sessionId, String sessionState,
+                             boolean vehicleBeaconDetected, String authFreshness,
+                             String publisherState) {
+            this.sessionId             = sessionId;
+            this.sessionState          = sessionState;
+            this.vehicleBeaconDetected = vehicleBeaconDetected;
+            this.authFreshness         = authFreshness;
+            this.publisherState        = publisherState;
         }
     }
 }

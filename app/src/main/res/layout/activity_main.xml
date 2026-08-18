@@ -3,6 +3,7 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
+    android:fitsSystemWindows="true"
     android:background="#ECEFF1">
 
     <!-- ── Header ── -->
@@ -11,8 +12,8 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:background="#00695C"
-        android:paddingTop="36dp"
-        android:paddingBottom="14dp"
+        android:paddingTop="24dp"
+        android:paddingBottom="10dp"
         android:paddingStart="16dp"
         android:paddingEnd="16dp"
         android:elevation="4dp">
@@ -20,7 +21,7 @@
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Hotel BLE Scanner"
+            android:text="BLE Scanner"
             android:textSize="20sp"
             android:textStyle="bold"
             android:textColor="#FFFFFF"
@@ -36,6 +37,17 @@
             android:gravity="center"
             android:layout_marginTop="3dp" />
 
+        <TextView
+            android:id="@+id/activeModeText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Mode: HOTEL"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            android:gravity="center"
+            android:layout_marginTop="4dp" />
+
     </LinearLayout>
 
     <!-- ── Scrollable content ── -->
@@ -43,7 +55,7 @@
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:fillViewport="true">
+        android:fillViewport="false">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -57,8 +69,8 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
                 android:background="#FFFFFF"
-                android:padding="12dp"
-                android:layout_marginBottom="10dp"
+                android:padding="8dp"
+                android:layout_marginBottom="6dp"
                 android:elevation="2dp">
 
                 <TextView
@@ -83,12 +95,12 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="Gate: --"
-                        android:textSize="13sp"
+                        android:textSize="12sp"
                         android:fontFamily="monospace"
-                        android:padding="8dp"
+                        android:padding="5dp"
                         android:background="#E0F2F1"
                         android:textColor="#004D40"
-                        android:layout_marginEnd="5dp" />
+                        android:layout_marginEnd="4dp" />
 
                     <TextView
                         android:id="@+id/beaconKiosk"
@@ -96,12 +108,12 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="Kiosk: --"
-                        android:textSize="13sp"
+                        android:textSize="12sp"
                         android:fontFamily="monospace"
-                        android:padding="8dp"
+                        android:padding="5dp"
                         android:background="#E0F2F1"
                         android:textColor="#004D40"
-                        android:layout_marginStart="5dp" />
+                        android:layout_marginStart="4dp" />
 
                 </LinearLayout>
 
@@ -116,12 +128,12 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="Elevator: --"
-                        android:textSize="13sp"
+                        android:textSize="12sp"
                         android:fontFamily="monospace"
-                        android:padding="8dp"
+                        android:padding="5dp"
                         android:background="#E0F2F1"
                         android:textColor="#004D40"
-                        android:layout_marginEnd="5dp" />
+                        android:layout_marginEnd="4dp" />
 
                     <TextView
                         android:id="@+id/beaconRoom"
@@ -129,14 +141,97 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="Room: --"
-                        android:textSize="13sp"
+                        android:textSize="12sp"
                         android:fontFamily="monospace"
-                        android:padding="8dp"
+                        android:padding="5dp"
                         android:background="#E0F2F1"
                         android:textColor="#004D40"
-                        android:layout_marginStart="5dp" />
+                        android:layout_marginStart="4dp" />
 
                 </LinearLayout>
+
+            </LinearLayout>
+
+            <!-- ── Insurance Beacon card (visible in INSURANCE mode only) ── -->
+            <LinearLayout
+                android:id="@+id/insuranceBeaconCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:background="#FFFFFF"
+                android:padding="8dp"
+                android:layout_marginBottom="6dp"
+                android:elevation="2dp"
+                android:visibility="gone">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="🚗  VEHICLE BEACON"
+                    android:textSize="11sp"
+                    android:textStyle="bold"
+                    android:textColor="#1565C0"
+                    android:letterSpacing="0.08"
+                    android:layout_marginBottom="8dp" />
+
+                <!-- Beacon name + RSSI row -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="6dp">
+
+                    <TextView
+                        android:id="@+id/insuranceBeaconName"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Beacon: --"
+                        android:textSize="12sp"
+                        android:fontFamily="monospace"
+                        android:padding="5dp"
+                        android:background="#E3F2FD"
+                        android:textColor="#0D47A1"
+                        android:layout_marginEnd="4dp" />
+
+                    <TextView
+                        android:id="@+id/insuranceBeaconRssi"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="RSSI: --"
+                        android:textSize="12sp"
+                        android:fontFamily="monospace"
+                        android:padding="5dp"
+                        android:background="#E3F2FD"
+                        android:textColor="#0D47A1"
+                        android:layout_marginStart="4dp" />
+
+                </LinearLayout>
+
+                <!-- Signal strength bar -->
+                <ProgressBar
+                    android:id="@+id/insuranceSignalBar"
+                    style="@android:style/Widget.ProgressBar.Horizontal"
+                    android:layout_width="match_parent"
+                    android:layout_height="8dp"
+                    android:max="100"
+                    android:progress="0"
+                    android:progressTint="#1565C0"
+                    android:layout_marginBottom="4dp" />
+
+                <!-- Association state -->
+                <TextView
+                    android:id="@+id/insuranceAssocState"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="State: WAITING_FOR_VEHICLE"
+                    android:textSize="12sp"
+                    android:fontFamily="monospace"
+                    android:padding="5dp"
+                    android:gravity="center"
+                    android:background="#E3F2FD"
+                    android:textColor="#0D47A1" />
 
             </LinearLayout>
 
@@ -146,8 +241,8 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
                 android:background="#FFFFFF"
-                android:padding="12dp"
-                android:layout_marginBottom="10dp"
+                android:padding="8dp"
+                android:layout_marginBottom="6dp"
                 android:elevation="2dp">
 
                 <TextView
@@ -172,12 +267,12 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="Mode: --"
-                        android:textSize="13sp"
+                        android:textSize="12sp"
                         android:fontFamily="monospace"
-                        android:padding="8dp"
+                        android:padding="5dp"
                         android:background="#E3F2FD"
                         android:textColor="#0D47A1"
-                        android:layout_marginEnd="5dp" />
+                        android:layout_marginEnd="4dp" />
 
                     <TextView
                         android:id="@+id/contextConfidence"
@@ -185,12 +280,12 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="Conf: --"
-                        android:textSize="13sp"
+                        android:textSize="12sp"
                         android:fontFamily="monospace"
-                        android:padding="8dp"
+                        android:padding="5dp"
                         android:background="#E3F2FD"
                         android:textColor="#0D47A1"
-                        android:layout_marginStart="5dp" />
+                        android:layout_marginStart="4dp" />
 
                 </LinearLayout>
 
@@ -205,12 +300,12 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="Motion: --"
-                        android:textSize="13sp"
+                        android:textSize="12sp"
                         android:fontFamily="monospace"
-                        android:padding="8dp"
+                        android:padding="5dp"
                         android:background="#E3F2FD"
                         android:textColor="#0D47A1"
-                        android:layout_marginEnd="5dp" />
+                        android:layout_marginEnd="4dp" />
 
                     <TextView
                         android:id="@+id/contextSpeed"
@@ -218,12 +313,12 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="Speed: -- km/h"
-                        android:textSize="13sp"
+                        android:textSize="12sp"
                         android:fontFamily="monospace"
-                        android:padding="8dp"
+                        android:padding="5dp"
                         android:background="#E3F2FD"
                         android:textColor="#0D47A1"
-                        android:layout_marginStart="5dp" />
+                        android:layout_marginStart="4dp" />
 
                 </LinearLayout>
 
@@ -233,30 +328,32 @@
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:orientation="vertical"
+                android:orientation="horizontal"
                 android:background="#FFFFFF"
-                android:padding="12dp"
-                android:layout_marginBottom="10dp"
-                android:elevation="2dp">
+                android:padding="8dp"
+                android:layout_marginBottom="6dp"
+                android:elevation="2dp"
+                android:gravity="center_vertical">
 
                 <TextView
-                    android:layout_width="match_parent"
+                    android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="🔐  BIOMETRIC STATUS"
                     android:textSize="11sp"
                     android:textStyle="bold"
                     android:textColor="#6A1B9A"
                     android:letterSpacing="0.08"
-                    android:layout_marginBottom="8dp" />
+                    android:layout_marginEnd="8dp" />
 
                 <TextView
                     android:id="@+id/biometricStatusText"
-                    android:layout_width="match_parent"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
+                    android:layout_weight="1"
                     android:text="🔒 Identity Required"
-                    android:textSize="13sp"
+                    android:textSize="12sp"
                     android:fontFamily="monospace"
-                    android:padding="10dp"
+                    android:padding="5dp"
                     android:gravity="center"
                     android:background="#F3E5F5"
                     android:textColor="#4A148C" />
@@ -270,7 +367,7 @@
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
                 android:background="#FFFFFF"
-                android:padding="12dp"
+                android:padding="8dp"
                 android:elevation="2dp"
                 android:visibility="visible">
 
@@ -296,12 +393,12 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="MODE: --"
-                        android:textSize="12sp"
+                        android:textSize="11sp"
                         android:fontFamily="monospace"
-                        android:padding="7dp"
+                        android:padding="5dp"
                         android:background="#FFF3E0"
                         android:textColor="#BF360C"
-                        android:layout_marginEnd="5dp" />
+                        android:layout_marginEnd="4dp" />
 
                     <TextView
                         android:id="@+id/debugSession"
@@ -309,12 +406,12 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="SESSION: --"
-                        android:textSize="12sp"
+                        android:textSize="11sp"
                         android:fontFamily="monospace"
-                        android:padding="7dp"
+                        android:padding="5dp"
                         android:background="#FFF3E0"
                         android:textColor="#BF360C"
-                        android:layout_marginStart="5dp" />
+                        android:layout_marginStart="4dp" />
 
                 </LinearLayout>
 
@@ -330,12 +427,12 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="BIO: --"
-                        android:textSize="12sp"
+                        android:textSize="11sp"
                         android:fontFamily="monospace"
-                        android:padding="7dp"
+                        android:padding="5dp"
                         android:background="#FFF3E0"
                         android:textColor="#BF360C"
-                        android:layout_marginEnd="5dp" />
+                        android:layout_marginEnd="4dp" />
 
                     <TextView
                         android:id="@+id/debugAdvisory"
@@ -343,12 +440,12 @@
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
                         android:text="ADVISORY: --"
-                        android:textSize="12sp"
+                        android:textSize="11sp"
                         android:fontFamily="monospace"
-                        android:padding="7dp"
+                        android:padding="5dp"
                         android:background="#FFF3E0"
                         android:textColor="#BF360C"
-                        android:layout_marginStart="5dp" />
+                        android:layout_marginStart="4dp" />
 
                 </LinearLayout>
 
@@ -357,49 +454,65 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="AT STATION: --"
-                    android:textSize="12sp"
+                    android:textSize="11sp"
                     android:fontFamily="monospace"
-                    android:padding="7dp"
+                    android:padding="5dp"
                     android:background="#FFF3E0"
                     android:textColor="#BF360C" />
 
             </LinearLayout>
 
-            <!-- ── Buttons ── -->
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:layout_marginTop="14dp"
-                android:layout_marginBottom="12dp">
-
-                <Button
-                    android:id="@+id/startButton"
-                    android:layout_width="0dp"
-                    android:layout_height="52dp"
-                    android:layout_weight="1"
-                    android:text="▶  Start Scanning"
-                    android:textSize="14sp"
-                    android:textColor="#FFFFFF"
-                    android:backgroundTint="#00897B"
-                    android:layout_marginEnd="6dp" />
-
-                <Button
-                    android:id="@+id/stopButton"
-                    android:layout_width="0dp"
-                    android:layout_height="52dp"
-                    android:layout_weight="1"
-                    android:text="■  Stop Scanning"
-                    android:textSize="14sp"
-                    android:textColor="#FFFFFF"
-                    android:backgroundTint="#E53935"
-                    android:alpha="0.5"
-                    android:enabled="false"
-                    android:layout_marginStart="6dp" />
-
-            </LinearLayout>
-
         </LinearLayout>
     </ScrollView>
+
+    <!-- ── Buttons pinned above nav bar ── -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:paddingStart="10dp"
+        android:paddingEnd="10dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="8dp"
+        android:background="#ECEFF1"
+        android:elevation="4dp">
+
+        <Button
+            android:id="@+id/startButton"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:text="▶ Start"
+            android:textSize="11sp"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="#00897B"
+            android:layout_marginEnd="3dp" />
+
+        <Button
+            android:id="@+id/stopButton"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:text="■ Stop"
+            android:textSize="11sp"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="#E53935"
+            android:alpha="0.5"
+            android:enabled="false"
+            android:layout_marginStart="3dp"
+            android:layout_marginEnd="3dp" />
+
+        <Button
+            android:id="@+id/resetButton"
+            android:layout_width="0dp"
+            android:layout_height="40dp"
+            android:layout_weight="1"
+            android:text="↺ Reset"
+            android:textSize="11sp"
+            android:textColor="#FFFFFF"
+            android:backgroundTint="#546E7A"
+            android:layout_marginStart="3dp" />
+
+    </LinearLayout>
 
 </LinearLayout>
