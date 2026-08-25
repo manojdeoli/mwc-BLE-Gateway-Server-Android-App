@@ -169,6 +169,9 @@ public class InsuranceTelemetryEventFactory {
         if (snapshot.state != null) {
             evidence.associationState = snapshot.state.name();
         }
+        if (snapshot.lastRssi != Integer.MIN_VALUE) {
+            evidence.rssi = snapshot.lastRssi;
+        }
         return evidence;
     }
 

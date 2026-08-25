@@ -468,6 +468,21 @@ public class InsuranceSessionManager {
     // Accessors for health endpoint and UI
     // -------------------------------------------------------------------------
 
+    /**
+     * Forces an immediate telemetry publish of current state.
+     * Called when the backend requests a resync (e.g. after WiFi cycle or restart).
+     * Only publishes if a session is active — otherwise a no-op.
+     */
+    public void requestResync() {
+        if (sessionId != null && isInitialEventSent
+                && currentSessionState == InsuranceSessionState.VEHICLE_ASSOCIATED) {
+            Log.d(TAG, "Resync requested — publishing PERIODIC_VERIFICATION");
+            publishEvent(InsuranceEventType.PERIODIC_VERIFICATION, false);
+        } else {
+            Log.d(TAG, "Resync requested but no active session (state=" + currentSessionState + ") — no-op");
+        }
+    }
+
     public InsuranceSessionState getSessionState()    { return currentSessionState; }
     public String                getSessionId()       { return sessionId; }
     public boolean               isSessionActive()    { return sessionId != null && isInitialEventSent; }

@@ -486,6 +486,11 @@ public class BLEScanService extends Service {
         fetchRemoteBeaconConfig();
     }
 
+    /**
+     * Called by GatewayServer when the backend sends a requestResync message.
+     * Re-broadcasts the last known insurance status event so the backend
+     * liveTrips cache is repopulated after a WiFi cycle or backend restart.
+     */
     // -------------------------------------------------------------------------
     // Config reload — called by GatewayServer when backend sends new config
     // -------------------------------------------------------------------------
@@ -765,6 +770,11 @@ public class BLEScanService extends Service {
         } else {
             Log.d(TAG, "[INS] Resync requested but no active session");
         }
+    }
+
+    public void onNetworkReconnected() {
+        Log.d(TAG, T_CONFIG + " Network reconnected — triggering state resync");
+        if (gatewayServer != null) gatewayServer.broadcastStateResync();
     }
 
     public void resetToHotelMode() {

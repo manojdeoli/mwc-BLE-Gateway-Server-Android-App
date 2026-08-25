@@ -174,8 +174,15 @@ public class VehicleAssociationController {
                 break;
 
             case VEHICLE_ASSOCIATED:
-                // Normal — update last seen, no state change
-                Log.d(TAG, "Vehicle beacon heartbeat: rssi=" + rssi);
+                // Heartbeat — but drop to DEGRADED if RSSI has fallen below threshold
+                if (rssi < config.getMinRssi()) {
+                    Log.d(TAG, "Beacon RSSI degraded below threshold: " + rssi
+                        + " < " + config.getMinRssi());
+                    transition(InsuranceSessionState.ASSOCIATION_DEGRADED,
+                        "RSSI below threshold: " + rssi + " < " + config.getMinRssi());
+                } else {
+                    Log.d(TAG, "Vehicle beacon heartbeat: rssi=" + rssi);
+                }
                 break;
 
             default:

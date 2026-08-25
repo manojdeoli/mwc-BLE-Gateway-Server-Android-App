@@ -128,6 +128,8 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     // Lifecycle
     // -------------------------------------------------------------------------
 
+    private android.net.ConnectivityManager.NetworkCallback networkCallback;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -186,6 +188,41 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         });
 
         checkPermissions();
+        registerNetworkCallback();
+    }
+
+    private void registerNetworkCallback() {
+        android.net.ConnectivityManager cm =
+            (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        if (cm == null) return;
+        networkCallback = new android.net.ConnectivityManager.NetworkCallback() {
+            @Override
+            public void onAvailable(android.net.Network network) {
+                // WiFi came back — refresh IP display and trigger a state resync
+                runOnUiThread(() -> displayIPAddress());
+                BLEScanService svc = BLEScanService.getActiveInstance();
+                if (svc != null) svc.onNetworkReconnected();
+            }
+            @Override
+            public void onLost(android.net.Network network) {
+                runOnUiThread(() ->
+                    ipAddressText.setText("Server: WiFi disconnected"));
+            }
+        };
+        android.net.NetworkRequest req = new android.net.NetworkRequest.Builder()
+            .addTransportType(android.net.NetworkCapabilities.TRANSPORT_WIFI)
+            .build();
+        cm.registerNetworkCallback(req, networkCallback);
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (networkCallback != null) {
+            android.net.ConnectivityManager cm =
+                (android.net.ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            if (cm != null) cm.unregisterNetworkCallback(networkCallback);
+        }
     }
 
     @Override

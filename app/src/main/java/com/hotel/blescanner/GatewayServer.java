@@ -29,6 +29,11 @@ public class GatewayServer extends NanoWSD {
     private final Map<String, BLEData>   bleDataStore = new ConcurrentHashMap<>();
     private final Gson   gson   = new Gson();
     private final String userId;
+
+    /** Last known state snapshot — rebuilt on every broadcastBLEEvent and broadcastContextEvent.
+     *  Sent immediately to any newly connected WebSocket client so the frontend
+     *  never has to wait for the next natural event after a reconnect or WiFi cycle. */
+    private volatile String lastStateSnapshot = null;
     private final DeviceModePrefs deviceModePrefs;
 
     /**
@@ -61,11 +66,13 @@ public class GatewayServer extends NanoWSD {
     public void start() throws IOException {
         super.start();
         pingFuture = pingScheduler.scheduleAtFixedRate(() -> {
+            boolean hasClients = false;
             for (Map.Entry<String, WebSocket> entry : new HashMap<>(webClients).entrySet()) {
                 try {
                     WebSocket ws = entry.getValue();
                     if (ws != null && ws.isOpen()) {
                         ws.ping(new byte[0]);
+                        hasClients = true;
                     } else {
                         webClients.remove(entry.getKey());
                     }
@@ -74,8 +81,14 @@ public class GatewayServer extends NanoWSD {
                     webClients.remove(entry.getKey());
                 }
             }
-        }, 15, 15, TimeUnit.SECONDS);
-        Log.d(TAG, "GatewayServer started with 15s ping keepalive");
+            // Re-broadcast last known state on every ping cycle so the frontend
+            // stays current even when BLE events are infrequent (issue 1 fix).
+            if (hasClients) {
+                String snapshot = lastStateSnapshot;
+                if (snapshot != null) broadcastToAllClients(snapshot);
+            }
+        }, 5, 5, TimeUnit.SECONDS);
+        Log.d(TAG, "GatewayServer started with 5s ping + state refresh");
     }
 
     @Override
@@ -191,7 +204,9 @@ public class GatewayServer extends NanoWSD {
 
                 BLEData data = new BLEData(mappedName, rssi, zone, System.currentTimeMillis());
                 bleDataStore.put(userId, data);
-                broadcastToAllClients(gson.toJson(data));
+                String json = gson.toJson(data);
+                lastStateSnapshot = json;  // keep latest for reconnecting clients
+                broadcastToAllClients(json);
             } catch (Exception e) {
                 Log.e(TAG, "Error in broadcastBLEEvent", e);
             }
@@ -205,6 +220,25 @@ public class GatewayServer extends NanoWSD {
                 broadcastToAllClients(gson.toJson(event));
             } catch (Exception e) {
                 Log.e(TAG, "Error broadcasting context event", e);
+            }
+        }).start();
+    }
+
+    /**
+     * Re-broadcasts the last known state snapshot to all connected clients.
+     * Called when network reconnects so the frontend updates immediately
+     * without waiting for the next natural BLE event.
+     */
+    public void broadcastStateResync() {
+        new Thread(() -> {
+            try {
+                String snapshot = lastStateSnapshot;
+                if (snapshot != null) {
+                    Log.d(TAG, "State resync broadcast to " + webClients.size() + " clients");
+                    broadcastToAllClients(snapshot);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error in broadcastStateResync", e);
             }
         }).start();
     }
@@ -305,7 +339,13 @@ public class GatewayServer extends NanoWSD {
         protected void onOpen() {
             Log.d(TAG, "WebSocket opened: " + clientId);
             webClients.put(clientId, this);
-            if (bleDataStore.containsKey(userId)) {
+            // Send last known state immediately — fixes stale UI after WiFi cycle or app restart.
+            // Client gets current beacon/rssi/zone/mode without waiting for the next BLE event.
+            String snapshot = lastStateSnapshot;
+            if (snapshot != null) {
+                try { send(snapshot); }
+                catch (IOException e) { Log.e(TAG, "Error sending state snapshot", e); }
+            } else if (bleDataStore.containsKey(userId)) {
                 try { send(gson.toJson(bleDataStore.get(userId))); }
                 catch (IOException e) { Log.e(TAG, "Error sending initial data", e); }
             }

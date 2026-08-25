@@ -135,6 +135,8 @@ public class InsuranceTelemetryEvent {
         public String  lastSeenAt;
         /** Optional: current association state name. Additive. */
         public String  associationState;
+        /** Optional: last measured RSSI in dBm. Additive. */
+        public Integer rssi;
 
         public VehicleAssociationEvidence(boolean beaconDetected, String beaconId) {
             this.beaconDetected = beaconDetected;
