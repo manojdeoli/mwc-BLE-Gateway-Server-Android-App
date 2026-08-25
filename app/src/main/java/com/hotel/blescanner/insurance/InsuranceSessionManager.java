@@ -68,6 +68,11 @@ public class InsuranceSessionManager {
     private volatile BiometricFreshnessState lastFreshnessState = BiometricFreshnessState.UNKNOWN;
     private volatile long                  lastPublishMs        = 0L;
     private volatile long                  lastBeaconSeenMs     = 0L;
+    private volatile int                   lastBeaconRssi       = Integer.MIN_VALUE;
+    private volatile long                  lastRssiChangeMs     = 0L;
+    // If RSSI is unchanged for this long, treat subsequent events as Android BLE cache hits
+    // and stop resetting the absence timer. 15s is well within the 30s grace period.
+    private static final long              RSSI_STALE_MS        = 15_000L;
 
     // Scheduled tasks
     private ScheduledFuture<?> periodicVerifyFuture;
@@ -194,7 +199,24 @@ public class InsuranceSessionManager {
             && (rawDeviceName.equals(configuredId) || rawDeviceName.equals(physicalId));
         if (!matches) return;
 
-        lastBeaconSeenMs = System.currentTimeMillis();
+        long now = System.currentTimeMillis();
+
+        // Detect Android BLE cache hits: same RSSI unchanged for > RSSI_STALE_MS
+        // means the device is likely off and Android is replaying its last cached result.
+        // Stop resetting the absence timer so it can fire and trigger VEHICLE_DISCONNECTED.
+        if (rssi != lastBeaconRssi) {
+            lastBeaconRssi   = rssi;
+            lastRssiChangeMs = now;
+        }
+        boolean isStaleCache = (now - lastRssiChangeMs) > RSSI_STALE_MS;
+        if (isStaleCache) {
+            Log.d(TAG, "Beacon RSSI unchanged for " + ((now - lastRssiChangeMs) / 1000)
+                + "s — treating as BLE cache hit, absence timer not reset");
+            vehicleController.onBeaconDetected(rawDeviceName, rssi);
+            return;
+        }
+
+        lastBeaconSeenMs = now;
         vehicleController.onBeaconDetected(rawDeviceName, rssi);
         cancelBeaconAbsenceCheck();
         scheduleBeaconAbsenceCheck();
@@ -280,6 +302,8 @@ public class InsuranceSessionManager {
         sessionId           = null;
         isInitialEventSent  = false;
         sessionCreationMs   = 0L;
+        lastBeaconRssi      = Integer.MIN_VALUE;
+        lastRssiChangeMs    = 0L;
         // GAP #1 — return to WAITING_FOR_VEHICLE, not IDLE, so mode stays active
         currentSessionState = InsuranceSessionState.WAITING_FOR_VEHICLE;
         vehicleController.reset();

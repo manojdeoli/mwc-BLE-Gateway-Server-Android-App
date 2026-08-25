@@ -602,6 +602,7 @@ public class BLEScanService extends Service {
         if (rfActivation != null)           rfActivation.ensureScanStopped();
         if (validationController != null)   validationController.shutdown();
         if (networkProximityMonitor != null) networkProximityMonitor.stop();
+        // Stop insurance session BEFORE gatewayServer so SESSION_ENDED publishes over WS
         if (insuranceSessionManager != null) insuranceSessionManager.stop();
         activeValidationController = null;
         activeBiometricManager     = null;
