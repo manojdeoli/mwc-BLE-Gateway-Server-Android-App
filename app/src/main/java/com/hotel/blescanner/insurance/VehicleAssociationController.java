@@ -174,15 +174,14 @@ public class VehicleAssociationController {
                 break;
 
             case VEHICLE_ASSOCIATED:
-                // Heartbeat — but drop to DEGRADED if RSSI has fallen below threshold
-                if (rssi < config.getMinRssi()) {
-                    Log.d(TAG, "Beacon RSSI degraded below threshold: " + rssi
-                        + " < " + config.getMinRssi());
-                    transition(InsuranceSessionState.ASSOCIATION_DEGRADED,
-                        "RSSI below threshold: " + rssi + " < " + config.getMinRssi());
-                } else {
-                    Log.d(TAG, "Vehicle beacon heartbeat: rssi=" + rssi);
-                }
+                // Bug 4 fix: the RSSI threshold guard at the top of this method already
+                // rejects any advertisement below config.getMinRssi() before reaching
+                // this switch. The previous check here was therefore unreachable via the
+                // normal path, but on Android 16 the higher BLE callback rate caused RSSI
+                // to fluctuate around the threshold boundary — the top guard would accept
+                // the packet (rssi >= minRssi) and then this branch would immediately
+                // degrade it, creating a rapid ASSOCIATED ↔ DEGRADED cycle. Removed.
+                Log.d(TAG, "Vehicle beacon heartbeat: rssi=" + rssi);
                 break;
 
             default:

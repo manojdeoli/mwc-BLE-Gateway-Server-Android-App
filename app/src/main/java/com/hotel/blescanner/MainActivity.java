@@ -109,10 +109,11 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
     private final BroadcastReceiver insuranceBeaconReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            String name  = intent.getStringExtra("beaconName");
-            int    rssi  = intent.getIntExtra("rssi", 0);
-            String state = intent.getStringExtra("sessionState");
-            updateInsuranceBeaconDisplay(name, rssi, state);
+            String name       = intent.getStringExtra("beaconName");
+            int    rssi       = intent.getIntExtra("rssi", 0);
+            String state      = intent.getStringExtra("sessionState");
+            String assocState = intent.getStringExtra("assocState");
+            updateInsuranceBeaconDisplay(name, rssi, state, assocState);
         }
     };
 
@@ -418,17 +419,28 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
         });
     }
 
-    private void updateInsuranceBeaconDisplay(String name, int rssi, String state) {
+    private void updateInsuranceBeaconDisplay(String name, int rssi, String state, String assocState) {
         runOnUiThread(() -> {
-            if (insuranceBeaconName != null)
-                insuranceBeaconName.setText("Beacon: " + (name != null ? name : "--"));
+            if (insuranceBeaconName != null) {
+                // Show a human-readable label: state prefix + beacon name.
+                // e.g. "Beacon: [CANDIDATE] ER26B00003" or "Beacon: [ASSOCIATED] ER26B00003"
+                String prefix;
+                if ("CANDIDATE_VEHICLE_DETECTED".equals(assocState)) {
+                    prefix = "[CANDIDATE] ";
+                } else if ("VEHICLE_ASSOCIATED".equals(assocState)) {
+                    prefix = "[ASSOCIATED] ";
+                } else if ("ASSOCIATION_DEGRADED".equals(assocState)) {
+                    prefix = "[DEGRADED] ";
+                } else {
+                    prefix = "";
+                }
+                insuranceBeaconName.setText("Beacon: " + prefix + (name != null ? name : "--"));
+            }
             if (insuranceBeaconRssi != null)
                 insuranceBeaconRssi.setText("RSSI: " + rssi + " dBm");
-            // Map RSSI (-40 strong .. -100 weak) to 0-100 progress
             if (insuranceSignalBar != null) {
                 int progress = Math.max(0, Math.min(100, (rssi + 100) * 100 / 60));
                 insuranceSignalBar.setProgress(progress);
-                // Colour: green > 60%, amber 30-60%, red < 30%
                 int tint = progress > 60 ? 0xFF1B5E20 : (progress > 30 ? 0xFFE65100 : 0xFFB71C1C);
                 insuranceSignalBar.setProgressTintList(
                     android.content.res.ColorStateList.valueOf(tint));
@@ -436,16 +448,15 @@ public class MainActivity extends AppCompatActivity implements BiometricCallback
             if (insuranceAssocState != null) {
                 String label = state != null ? state.replace('_', ' ') : "WAITING FOR VEHICLE";
                 insuranceAssocState.setText("State: " + label);
-                // Colour the state chip
                 int bg, fg;
                 if (state != null && state.contains("ASSOCIATED")) {
-                    bg = 0xFFE8F5E9; fg = 0xFF1B5E20; // green
+                    bg = 0xFFE8F5E9; fg = 0xFF1B5E20;
                 } else if (state != null && state.contains("CANDIDATE")) {
-                    bg = 0xFFFFF8E1; fg = 0xFFE65100; // amber
+                    bg = 0xFFFFF8E1; fg = 0xFFE65100;
                 } else if (state != null && state.contains("DEGRADED")) {
-                    bg = 0xFFFFEBEE; fg = 0xFFB71C1C; // red
+                    bg = 0xFFFFEBEE; fg = 0xFFB71C1C;
                 } else {
-                    bg = 0xFFE3F2FD; fg = 0xFF0D47A1; // blue (waiting)
+                    bg = 0xFFE3F2FD; fg = 0xFF0D47A1;
                 }
                 insuranceAssocState.setBackgroundColor(bg);
                 insuranceAssocState.setTextColor(fg);

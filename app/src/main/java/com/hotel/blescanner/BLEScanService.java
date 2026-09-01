@@ -231,15 +231,20 @@ public class BLEScanService extends Service {
 
                     if (modeController.isInsuranceMode() && insuranceSessionManager != null) {
                         insuranceSessionManager.onBeaconDetected(deviceName, rssi);
-                        // Broadcast so UI can show vehicle beacon RSSI in Insurance mode
+                        // Broadcast so UI can show vehicle beacon RSSI in Insurance mode.
+                        // Also broadcast any beacon seen while in CANDIDATE or ASSOCIATED state
+                        // so the UI reflects the beacon currently being tracked, not just the
+                        // one that matches the exact configured ID.
                         InsuranceConfig cfg = insuranceConfig;
                         if (cfg != null && (deviceName.equals(cfg.getRegisteredVehicleBeaconId())
                                 || deviceName.equals(cfg.getPhysicalBeaconId()))) {
+                            com.hotel.blescanner.insurance.InsuranceSessionState assocState =
+                                insuranceSessionManager.getVehicleController().getState();
                             Intent vi = new Intent("INSURANCE_BEACON_UPDATE");
                             vi.putExtra("beaconName", deviceName);
                             vi.putExtra("rssi", rssi);
-                            vi.putExtra("sessionState",
-                                insuranceSessionManager.getSessionState().name());
+                            vi.putExtra("sessionState", insuranceSessionManager.getSessionState().name());
+                            vi.putExtra("assocState", assocState.name());
                             LocalBroadcastManager.getInstance(BLEScanService.this).sendBroadcast(vi);
                         }
                     }
@@ -658,14 +663,17 @@ public class BLEScanService extends Service {
             Log.w(TAG, "[INS] Received invalid insurance config — ignoring");
             return;
         }
-        // Skip re-activation if already in INSURANCE mode with the same beacon ID.
-        // This prevents flickering caused by the web client re-sending insuranceConfig
-        // on every WebSocket reconnect.
+        // Bug 3 fix: broaden the de-duplication check to cover all key config fields,
+        // not just beaconId. On Android 16, more frequent network transitions cause the
+        // web client to reconnect and re-send insuranceConfig more often. If any field
+        // differs (e.g. backendBaseUrl, policyId) a real restart is warranted; if all
+        // fields match it is a duplicate reconnect message and must be suppressed.
         if (modeController.isInsuranceMode() && insuranceConfig != null
-                && cfg.getRegisteredVehicleBeaconId().equals(
-                        insuranceConfig.getRegisteredVehicleBeaconId())) {
-            Log.d(TAG, "[INS] insuranceConfig received — already active with same beacon, skipping restart");
-            broadcastTransportDebugState(); // ensure UI stays in sync after WS reconnect
+                && cfg.getRegisteredVehicleBeaconId().equals(insuranceConfig.getRegisteredVehicleBeaconId())
+                && cfg.getPolicyId().equals(insuranceConfig.getPolicyId())
+                && cfg.getBackendBaseUrl().equals(insuranceConfig.getBackendBaseUrl())) {
+            Log.d(TAG, "[INS] insuranceConfig received — already active with same config, skipping restart");
+            broadcastTransportDebugState();
             return;
         }
         cfg.setEnabled(true);

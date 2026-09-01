@@ -34,6 +34,10 @@ public class GatewayServer extends NanoWSD {
      *  Sent immediately to any newly connected WebSocket client so the frontend
      *  never has to wait for the next natural event after a reconnect or WiFi cycle. */
     private volatile String lastStateSnapshot = null;
+    // Bug 2 fix: track whether the device is in INSURANCE mode. When true, the ping
+    // loop must NOT re-broadcast lastStateSnapshot because that snapshot is always a
+    // Hotel-mode BLE event and causes the web client UI to flip back to Hotel every 5s.
+    private volatile boolean insuranceModeActive = false;
     private final DeviceModePrefs deviceModePrefs;
 
     /**
@@ -83,7 +87,9 @@ public class GatewayServer extends NanoWSD {
             }
             // Re-broadcast last known state on every ping cycle so the frontend
             // stays current even when BLE events are infrequent (issue 1 fix).
-            if (hasClients) {
+            // Bug 2 fix: skip snapshot re-broadcast in INSURANCE mode — lastStateSnapshot
+            // is always a Hotel BLE event and would flip the UI back to Hotel every 5s.
+            if (hasClients && !insuranceModeActive) {
                 String snapshot = lastStateSnapshot;
                 if (snapshot != null) broadcastToAllClients(snapshot);
             }
@@ -146,6 +152,9 @@ public class GatewayServer extends NanoWSD {
 
     public void setInsuranceHealthProvider(InsuranceHealthProvider provider) {
         this.insuranceHealthProvider = provider;
+        // Bug 2 fix: keep insuranceModeActive in sync so the ping loop knows
+        // not to re-broadcast the Hotel snapshot while Insurance mode is active.
+        insuranceModeActive = (provider != null);
     }
 
     @Override

@@ -73,6 +73,12 @@ public class InsuranceSessionManager {
     // If RSSI is unchanged for this long, treat subsequent events as Android BLE cache hits
     // and stop resetting the absence timer. 15s is well within the 30s grace period.
     private static final long              RSSI_STALE_MS        = 15_000L;
+    // Bug 1 fix: after a session ends the beacon is still physically present, so the
+    // next BLE advertisement arrives almost immediately on Android 16 and would restart
+    // a new session before the UI has time to reflect the ended state. This cooldown
+    // prevents re-association for 3 seconds after endSession() is called.
+    private volatile long                  sessionEndedAtMs     = 0L;
+    private static final long              RE_ASSOCIATION_COOLDOWN_MS = 3_000L;
 
     // Scheduled tasks
     private ScheduledFuture<?> periodicVerifyFuture;
@@ -201,6 +207,15 @@ public class InsuranceSessionManager {
 
         long now = System.currentTimeMillis();
 
+        // Bug 1 fix: suppress re-association for RE_ASSOCIATION_COOLDOWN_MS after a session
+        // ends. On Android 16 the BLE callback fires almost immediately after reset(),
+        // causing a tight session-end → session-start loop visible as flickering.
+        if (sessionEndedAtMs > 0 && (now - sessionEndedAtMs) < RE_ASSOCIATION_COOLDOWN_MS) {
+            Log.d(TAG, "Re-association suppressed — cooldown active for "
+                + (RE_ASSOCIATION_COOLDOWN_MS - (now - sessionEndedAtMs)) + "ms more");
+            return;
+        }
+
         // Detect Android BLE cache hits: same RSSI unchanged for > RSSI_STALE_MS
         // means the device is likely off and Android is replaying its last cached result.
         // Stop resetting the absence timer so it can fire and trigger VEHICLE_DISCONNECTED.
@@ -304,6 +319,9 @@ public class InsuranceSessionManager {
         sessionCreationMs   = 0L;
         lastBeaconRssi      = Integer.MIN_VALUE;
         lastRssiChangeMs    = 0L;
+        // Bug 1 fix: record the time session ended so onBeaconDetected() can enforce
+        // the re-association cooldown and prevent an immediate restart loop.
+        sessionEndedAtMs    = System.currentTimeMillis();
         // GAP #1 — return to WAITING_FOR_VEHICLE, not IDLE, so mode stays active
         currentSessionState = InsuranceSessionState.WAITING_FOR_VEHICLE;
         vehicleController.reset();
